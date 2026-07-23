@@ -1,0 +1,1 @@
+Trigger targeted TEST deployment pointer repair to Apps Script version 2.
