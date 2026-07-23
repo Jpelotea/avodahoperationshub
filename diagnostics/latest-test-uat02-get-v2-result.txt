@@ -1,0 +1,26 @@
+TEST UAT-02 Intake to Lead GET V2 result
+commit=376bf183bab2298440d2cd76cb61e695b1cc38cb
+utc=2026-07-23T13:11:24Z
+preserve_hardened_source=success
+build_get_runner=success
+deploy_temp_version=success
+temporary_apps_script_version=5
+deployment_pointer_verified_at_temp=yes
+temp_endpoint_marker_step=failure
+temp_endpoint_marker_seen=no
+execute_uat02=skipped
+result_code=unknown
+intake_rows_created=unknown
+lead_rows_linked=unknown
+first_result=unknown
+replay_result=unknown
+normalized_email_ok=unknown
+normalized_phone_ok=unknown
+intake_follow_up_ok=unknown
+lead_follow_up_ok=unknown
+gate_cleanup_step=success
+public_portal_gate_cleaned=not_applicable
+restore_hardened_source_and_at_2=success
+deployment_restored_at_2=yes
+production_touched=no
+raw_tokens_or_workflow_tokens_recorded=no
