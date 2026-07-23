@@ -1,0 +1,9 @@
+TEST deployment v2 repair
+commit=53df44fbe3b9279711a6bb3f2dfde0e321080ca6
+utc=2026-07-23T10:41:55Z
+version_2_exists=success
+deployment_update=success
+deployment_verify_at_2=success
+target_deployment=- AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS @2 - TEST v1.1.1 - modular management-token Calendar exposure hardened; all write gates disabled
+source_push_performed=no
+new_version_created=no
