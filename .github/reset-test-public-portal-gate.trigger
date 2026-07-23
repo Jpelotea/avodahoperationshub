@@ -1,0 +1,1 @@
+Reset TEST PUBLIC_PORTAL_ENABLED to FALSE and restore hardened deployment @2 after failed UAT-02.
