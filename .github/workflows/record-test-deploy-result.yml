@@ -1,0 +1,64 @@
+name: Record TEST Apps Script Deployment Result
+
+on:
+  workflow_run:
+    workflows: ["Deploy TEST Apps Script"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Record sanitized deployment result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+          HTML_URL: ${{ github.event.workflow_run.html_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          REPORT="diagnostics/latest-test-deploy-result.txt"
+          {
+            echo "TEST Apps Script deployment result"
+            echo "run_id=$RUN_ID"
+            echo "run_number=$RUN_NUMBER"
+            echo "run_attempt=$RUN_ATTEMPT"
+            echo "event=$EVENT_NAME"
+            echo "head_sha=$HEAD_SHA"
+            echo "conclusion=$CONCLUSION"
+            echo "url=$HTML_URL"
+            echo "jobs:"
+          } > "$REPORT"
+
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/actions/runs/$RUN_ID/jobs?per_page=100" \
+            | jq -r '.jobs[] | "- job=" + .name + " conclusion=" + (.conclusion // "") + "\n" + ([.steps[]? | "  step=" + .name + " conclusion=" + (.conclusion // "")] | join("\n"))' \
+            >> "$REPORT"
+
+      - name: Commit sanitized result
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add diagnostics/latest-test-deploy-result.txt
+          git commit -m "Record TEST Apps Script deployment result" || exit 0
+          git push
