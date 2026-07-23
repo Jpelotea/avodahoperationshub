@@ -1,11 +1,11 @@
-name: Deploy TEST Apps Script v1.1.1 Retry
+name: Deploy TEST Apps Script v1.1.1 JSON Retry
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - '.github/deploy-test-v1.1.1-retry.trigger'
+      - '.github/deploy-test-v1.1.1-json.trigger'
 
 permissions:
   contents: write
