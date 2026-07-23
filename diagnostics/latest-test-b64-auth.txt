@@ -1,6 +1,6 @@
 TEST CLASPRC_JSON authentication diagnostic
-commit=a5a58aa678b397977c93a4857098cdb23d156aea
-utc=2026-07-23T08:41:38Z
+commit=175f51b816dfde8efcdf46d755891f1bf29b1bb1
+utc=2026-07-23T08:42:18Z
 CLASPRC_JSON_present=yes
 CLASPRC_JSON_length=573
 starts_with_brace=yes
