@@ -2,9 +2,17 @@ name: Deploy TEST Apps Script
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/deploy-test-v1.1.1.trigger'
 
 permissions:
   contents: read
+
+concurrency:
+  group: deploy-test-apps-script
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -24,13 +32,19 @@ jobs:
 
       - name: Configure clasp authentication
         shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
+          test -n "$CLASPRC_JSON"
           mkdir -p "$HOME"
-          printf '%s' '${{ secrets.CLASPRC_JSON }}' > "$HOME/.clasprc.json"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          test -s "$HOME/.clasprc.json"
           cat > .clasp.json <<'JSON'
           {
             "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
-            "rootDir": "src"
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
           }
           JSON
 
@@ -44,6 +58,7 @@ jobs:
           test -f src/LegacyV3.gs
           test -f src/WebApp.gs
           test -f src/Bookings.gs
+          test -f src/FoundationTests.gs
 
       - name: Apply TEST v1.1.1 security hardening
         run: node scripts/harden-v1.1.1.js
@@ -56,6 +71,7 @@ jobs:
           grep -q "Management Token Hash.*''" src/Bookings.gs
           grep -q "publicManagedBookingResult_" src/WebApp.gs
           node --check scripts/harden-v1.1.1.js
+          for f in src/*.gs; do node --check < "$f"; done
 
       - name: Push hardened TEST source
         run: clasp push --force
