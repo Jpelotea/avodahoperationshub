@@ -1,0 +1,202 @@
+name: Reset TEST Public Portal Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/reset-test-public-portal-gate.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node and clasp
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Preserve hardened TEST source
+        id: preserve
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src original-src
+          mkdir -p src
+          clasp pull >/dev/null
+          cp -R src original-src
+
+      - name: Build one-time gate reset endpoint
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(openssl rand -hex 32)"
+          printf '%s' "$TOKEN" > /tmp/reset-token
+          chmod 600 /tmp/reset-token
+          TOKEN_HASH="$(printf '%s' "$TOKEN" | sha256sum | awk '{print $1}')"
+          cat > src/UATGateReset.gs <<'GS'
+          var UAT_GATE_RESET_TOKEN_SHA256_ = '__TOKEN_HASH__';
+
+          function uatGateResetSha256Hex_(value) {
+            var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+              String(value || ''), Utilities.Charset.UTF_8);
+            return bytes.map(function(item) {
+              var number = item < 0 ? item + 256 : item;
+              return ('0' + number.toString(16)).slice(-2);
+            }).join('');
+          }
+
+          function handleUatGateReset_(payload) {
+            payload = payload || {};
+            var actual = uatGateResetSha256Hex_(payload.token);
+            if (actual !== UAT_GATE_RESET_TOKEN_SHA256_) {
+              return {ok:false, code:'UNAUTHORIZED'};
+            }
+            if (getEnvironment_() !== 'TEST') {
+              return {ok:false, code:'TEST_ONLY'};
+            }
+            var spreadsheet = getHubSpreadsheet_();
+            if (spreadsheet.getId() !== '1f8rZ8hVxMnrrFwnfezMhG1CklxDizdtC2IRvEnbC13s' ||
+                !/^TEST(?:\s|-)/i.test(spreadsheet.getName())) {
+              return {ok:false, code:'SPREADSHEET_MISMATCH'};
+            }
+            var props = PropertiesService.getScriptProperties();
+            props.setProperty('PUBLIC_PORTAL_ENABLED', 'FALSE');
+            return {
+              ok:true,
+              code:'TEST_PUBLIC_PORTAL_GATE_RESET',
+              public_portal_enabled:String(props.getProperty('PUBLIC_PORTAL_ENABLED') || '').trim().toUpperCase() === 'TRUE',
+              booking_workflow_enabled:String(props.getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase() === 'TRUE',
+              calendar_writes_enabled:String(props.getProperty('ENABLE_CALENDAR_WRITES') || '').trim().toUpperCase() === 'TRUE'
+            };
+          }
+          GS
+          sed -i "s/__TOKEN_HASH__/$TOKEN_HASH/g" src/UATGateReset.gs
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/Code.gs')
+          text = path.read_text(encoding='utf-8')
+          marker = '    if (!isAuthorizedWebhook'
+          idx = text.find(marker)
+          if idx < 0:
+              raise SystemExit('Could not locate webhook authorization guard')
+          insert = '''    if (payload.action === "__uat_gate_reset" && typeof handleUatGateReset_ === "function") {\n      return apiJsonResponse_(handleUatGateReset_(payload), requestId);\n    }\n\n'''
+          text = text[:idx] + insert + text[idx:]
+          path.write_text(text, encoding='utf-8')
+          PY
+          for f in src/*.gs; do node --check < "$f"; done
+
+      - name: Deploy temporary reset version
+        id: deploy
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          clasp push --force >/dev/null
+          OUTPUT="$(clasp version 'TEMP TEST public portal gate reset')"
+          VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
+          test -n "$VERSION"
+          printf '%s' "$VERSION" > /tmp/reset-version
+          clasp update-deployment "$DEPLOYMENT_ID" --versionNumber "$VERSION" --description "TEMP TEST public portal gate reset; restore to @2" >/dev/null
+
+      - name: Reset gate with propagation wait
+        id: reset_gate
+        shell: bash
+        env:
+          WEBAPP_URL: https://script.google.com/macros/s/AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS/exec
+        run: |
+          set -euo pipefail
+          TOKEN="$(cat /tmp/reset-token)"
+          jq -n --arg token "$TOKEN" '{action:"__uat_gate_reset",token:$token}' > /tmp/reset-request.json
+          RESET_OK=0
+          for attempt in $(seq 1 45); do
+            curl -fsS -L -H 'Content-Type: application/json' --data-binary @/tmp/reset-request.json "$WEBAPP_URL?uat_reset_attempt=$attempt" > /tmp/reset-response.json || true
+            if jq -e '.ok == true and .code == "TEST_PUBLIC_PORTAL_GATE_RESET" and .public_portal_enabled == false and .booking_workflow_enabled == false and .calendar_writes_enabled == false' /tmp/reset-response.json >/dev/null 2>&1; then
+              RESET_OK=1
+              break
+            fi
+            sleep 4
+          done
+          test "$RESET_OK" -eq 1
+
+      - name: Restore hardened source and deployment at 2
+        id: restore
+        if: always()
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          rm -rf src
+          cp -R original-src src
+          clasp push --force >/dev/null
+          clasp update-deployment "$DEPLOYMENT_ID" --versionNumber 2 --description "TEST v1.1.1 - modular management-token Calendar exposure hardened; all write gates disabled" >/dev/null
+          clasp deployments > /tmp/reset-deployments.txt
+          grep "$DEPLOYMENT_ID" /tmp/reset-deployments.txt > /tmp/reset-target.txt
+          grep -Eq '@2([^0-9]|$)' /tmp/reset-target.txt
+
+      - name: Publish sanitized reset result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PRESERVE: ${{ steps.preserve.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          DEPLOY: ${{ steps.deploy.outcome }}
+          RESET: ${{ steps.reset_gate.outcome }}
+          RESTORE: ${{ steps.restore.outcome }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-public-portal-gate-reset.txt"
+          VERSION="not_created"
+          [ -f /tmp/reset-version ] && VERSION="$(cat /tmp/reset-version)"
+          cat > "$REPORT" <<EOF
+          TEST public portal gate reset
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          preserve_source=${PRESERVE}
+          build_reset_endpoint=${BUILD}
+          deploy_reset_endpoint=${DEPLOY}
+          reset_public_portal_gate=${RESET}
+          restore_hardened_source_and_at_2=${RESTORE}
+          temporary_apps_script_version=${VERSION}
+          production_touched=no
+          raw_token_recorded=no
+          EOF
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST public portal gate reset" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST public portal gate reset" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
