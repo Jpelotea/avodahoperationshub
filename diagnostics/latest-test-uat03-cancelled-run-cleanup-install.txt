@@ -1,0 +1,10 @@
+TEST UAT-03 cancelled run cleanup install
+commit=0be8b7ed0521c776405810e05f70784a80083edc
+utc=2026-07-23T18:41:31Z
+cleanup_function=cleanupPhase6Uat03CancelledRun
+live_source_push=success
+deployment_changed=no
+script_properties_changed=no
+spreadsheet_changed=no
+calendar_changed=no
+production_touched=no
