@@ -45,12 +45,13 @@ jobs:
           rm -rf src && mkdir -p src
           clasp pull >/dev/null
 
+          EXEC_API="$(node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('src/appsscript.json','utf8')); process.stdout.write(m.executionApi ? 'present' : 'absent');")"
           REPORT="diagnostics/latest-test-runtime-entrypoints.txt"
           {
             echo "TEST runtime entrypoint inventory"
             echo "commit=${GITHUB_SHA}"
             echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "manifest_execution_api=$(node -e \"const m=require('./src/appsscript.json'); console.log(m.executionApi ? 'present' : 'absent')\")"
+            echo "manifest_execution_api=${EXEC_API}"
             echo "functions:"
             for f in FoundationTests.gs Calendar.gs Bookings.gs Config.gs Setup.gs Validation.gs Triggers.gs WebApp.gs Security.gs; do
               if [ -f "src/$f" ]; then
@@ -62,6 +63,7 @@ jobs:
           } > "$REPORT"
 
       - name: Publish sanitized entrypoint inventory
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,6 +71,15 @@ jobs:
         run: |
           set -euo pipefail
           REPORT="diagnostics/latest-test-runtime-entrypoints.txt"
+          if [ ! -f "$REPORT" ]; then
+            mkdir -p diagnostics
+            cat > "$REPORT" <<EOF
+          TEST runtime entrypoint inventory
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          inventory_failed_before_report=yes
+          EOF
+          fi
           CONTENT_B64="$(base64 -w 0 "$REPORT")"
           CURRENT_SHA="$(curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
