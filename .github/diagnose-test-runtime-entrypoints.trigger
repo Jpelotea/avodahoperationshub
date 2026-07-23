@@ -1,0 +1,1 @@
+Trigger TEST runtime entrypoint inventory.
