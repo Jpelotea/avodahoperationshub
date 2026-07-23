@@ -1,0 +1,12 @@
+TEST web app HTTP-path diagnostic
+commit=5351bd7b0de550c4583e35686a20d399257fbe90
+utc=2026-07-23T12:48:30Z
+post_http_code=200
+post_contains_unauthorized=yes
+post_contains_invalid_json=no
+post_is_html=no
+portal_get_http_code=200
+portal_disabled_marker=yes
+portal_is_html=yes
+write_operations_performed=no
+production_touched=no
