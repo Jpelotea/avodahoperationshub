@@ -1,0 +1,144 @@
+name: Inspect TEST UAT-03 Exact Contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat03-exact-contracts.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST source and extract exact function bodies
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          targets = {
+            'Bookings.gs': [
+              'publicManagedBookingResult_',
+              'bookingManagementParts_',
+              'createConsultationBookingCore_',
+              'rescheduleConsultationBooking_',
+              'cancelConsultationBooking_',
+              'reconcileBookingRecords_'
+            ],
+            'Calendar.gs': [
+              'getBookingRuntimeConfig_',
+              'assertBookingWritesEnabled_',
+              'getBookingAvailability_',
+              'bookingCalendarDescription_',
+              'createBookingCalendarEvent_',
+              'readBookingCalendarEvent_',
+              'updateBookingCalendarEventTime_',
+              'deleteBookingCalendarEvent_'
+            ],
+            'WebApp.gs': [
+              'assertPublicBookingEnabled_',
+              'createPublicConsultationBooking',
+              'getPublicManagedBooking',
+              'reschedulePublicConsultationBooking',
+              'cancelPublicConsultationBooking'
+            ]
+          }
+
+          def extract(text, name):
+              m = re.search(r'function\s+' + re.escape(name) + r'\s*\([^)]*\)\s*\{', text)
+              if not m:
+                  return None
+              i = m.start()
+              j = m.end() - 1
+              depth = 0
+              in_s = in_d = in_t = False
+              esc = False
+              k = j
+              while k < len(text):
+                  c = text[k]
+                  if esc:
+                      esc = False
+                  elif c == '\\':
+                      esc = True
+                  elif not in_d and not in_t and c == "'":
+                      in_s = not in_s
+                  elif not in_s and not in_t and c == '"':
+                      in_d = not in_d
+                  elif not in_s and not in_d and c == '`':
+                      in_t = not in_t
+                  elif not in_s and not in_d and not in_t:
+                      if c == '{': depth += 1
+                      elif c == '}':
+                          depth -= 1
+                          if depth == 0:
+                              return text[i:k+1]
+                  k += 1
+              return None
+
+          out = [
+              'TEST UAT-03 exact contract inspection',
+              'write_operations_performed=no',
+              'production_touched=no',
+              ''
+          ]
+          for filename, names in targets.items():
+              path = Path('src') / filename
+              text = path.read_text(encoding='utf-8') if path.exists() else ''
+              for name in names:
+                  body = extract(text, name)
+                  out.append('## ' + filename + ' :: ' + name)
+                  if not body:
+                      out.append('not_found')
+                  else:
+                      # Never publish long token-like literals if any are embedded in source.
+                      body = re.sub(r'([A-Za-z0-9_-]{40,})', '[REDACTED_LONG_LITERAL]', body)
+                      out.extend(body.splitlines())
+                  out.append('')
+
+          Path('diagnostics/latest-test-uat03-exact-contracts.txt').write_text('\n'.join(out) + '\n', encoding='utf-8')
+          PY
+
+      - name: Publish sanitized diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-exact-contracts.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 exact contract inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 exact contract inspection" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
