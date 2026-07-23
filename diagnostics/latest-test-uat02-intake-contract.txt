@@ -1,0 +1,403 @@
+TEST UAT-02 public intake contract inspection
+commit=7fc298c1f4a2ce05d8bf996df66bb94a5a15fb88
+utc=2026-07-23T12:17:30Z
+webapp_intake_context:
+120:    throw avodahError_('PUBLIC_BOOKING_DISABLED',
+121:      'Consultation booking is not active.');
+122:  }
+123:  assertBookingWritesEnabled_();
+124:  return status;
+125:}
+126:
+127:function publicPortalText_(value, maximum) {
+128:  return String(value == null ? '' : value)
+129:    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+130:    .replace(/\s+/g, ' ')
+131:    .trim()
+132:    .substring(0, Number(maximum || 500));
+133:}
+134:
+135:function normalizePublicIntakePayload_(payload) {
+136:  var input = payload || {};
+137:  if (publicPortalText_(input.website, 200)) {
+138:    throw avodahError_('INVALID_SUBMISSION', 'The submission could not be accepted.');
+139:  }
+140:  var fullName = publicPortalText_(input.full_name || input.fullName, 120);
+141:  var email = normalizeEmail_(input.email || input.email_address);
+142:  var rawPhone = publicPortalText_(input.mobile_number || input.phone, 40);
+143:  var phone = normalizePhone_(rawPhone);
+144:  var submissionId = publicPortalText_(input.submission_id || input.submissionId, 60);
+145:  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+146:      .test(submissionId)) {
+147:    throw avodahError_('INVALID_SUBMISSION_ID', 'Please refresh and submit the form again.');
+148:  }
+149:  if (fullName.length < 2) {
+150:    throw avodahError_('FULL_NAME_REQUIRED', 'Please enter your full name.');
+151:  }
+152:  if (!isValidEmail_(email)) {
+153:    throw avodahError_('INVALID_EMAIL', 'Please enter a valid email address.');
+154:  }
+155:  if (rawPhone && !isValidPhone_(phone)) {
+156:    throw avodahError_('INVALID_PHONE', 'Please enter a valid mobile number.');
+157:  }
+158:  if (!isConsentGranted_(input.consent)) {
+159:    throw avodahError_('CONSENT_REQUIRED',
+160:      'Consent is required before the inquiry can be submitted.');
+161:  }
+162:  return {
+163:    submissionId: submissionId,
+164:    fullName: fullName,
+165:    email: email,
+166:    rawPhone: rawPhone,
+167:    normalizedPhone: phone,
+168:    location: publicPortalText_(input.location, 120),
+169:    primaryNeed: publicPortalText_(input.primary_need || input.primaryNeed, 300),
+170:    preferredContactMethod: publicPortalText_(
+171:      input.preferred_contact_method || input.preferredContactMethod, 100),
+172:    preferredSchedule: publicPortalText_(
+173:      input.preferred_schedule || input.preferredSchedule, 160),
+174:    additionalNotes: publicPortalText_(input.additional_notes || input.notes, 1000),
+175:    consultationRequested: truthy_(
+176:      input.consultation_requested || input.consultationRequested)
+177:  };
+178:}
+179:
+180:function publicRateKey_(scope, value) {
+181:  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+182:    String(scope || '') + '|' + String(value || ''), Utilities.Charset.UTF_8);
+183:  return 'AVODAH_PUBLIC_' + String(scope || 'ACTION').toUpperCase() + '_' +
+184:    Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, '').substring(0, 32);
+185:}
+186:
+187:function assertPublicRateLimit_(scope, value, maximum, ttlSeconds) {
+188:  var cache = CacheService.getScriptCache();
+189:  var key = publicRateKey_(scope, value);
+190:  var count = Number(cache.get(key) || 0);
+191:  if (count >= Number(maximum || 5)) {
+192:    throw avodahError_('RATE_LIMITED',
+193:      'Too many attempts were received. Please try again later.');
+194:  }
+195:  cache.put(key, String(count + 1), Number(ttlSeconds || 3600));
+196:}
+197:
+198:function publicTokenSecret_() {
+199:  var secret = String(PropertiesService.getScriptProperties()
+200:    .getProperty('[REDACTED] || '');
+201:  if (secret.length < 24) {
+202:    throw avodahError_('PUBLIC_TOKEN_NOT_CONFIGURED',
+203:      'The public workflow token service is not configured.');
+204:  }
+205:  return secret;
+206:}
+207:
+208:function publicBase64Encode_(value) {
+209:  return Utilities.base64EncodeWebSafe(String(value), Utilities.Charset.UTF_8)
+210:    .replace(/=+$/g, '');
+211:}
+212:
+213:function publicBase64Decode_(value) {
+214:  return Utilities.newBlob(Utilities.base64DecodeWebSafe(String(value)))
+215:    .getDataAsString('UTF-8');
+216:}
+217:
+218:function publicHmac_(value, secretOverride) {
+219:  var secret = String(secretOverride || publicTokenSecret_());
+220:  var signature = Utilities.computeHmacSha256Signature(String(value),
+221:    secret, Utilities.Charset.UTF_8);
+222:  return Utilities.base64EncodeWebSafe(signature).replace(/=+$/g, '');
+223:}
+224:
+225:function publicConstantTimeEquals_(left, right) {
+226:  var a = String(left || '');
+227:  var b = String(right || '');
+228:  var mismatch = a.length ^ b.length;
+229:  var length = Math.max(a.length, b.length);
+230:  for (var index = 0; index < length; index += 1) {
+231:    mismatch |= (a.charCodeAt(index % Math.max(a.length, 1)) || 0) ^
+232:      (b.charCodeAt(index % Math.max(b.length, 1)) || 0);
+233:  }
+234:  return mismatch === 0;
+235:}
+236:
+237:function issuePublicWorkflowToken_(intakeId, leadId, email, nowValue,
+238:    secretOverride) {
+239:  var issuedAt = nowValue instanceof Date ? nowValue : new Date();
+240:  var claims = {
+241:    kind: 'PUBLIC_BOOKING',
+242:    intake_id: String(intakeId || ''),
+243:    lead_id: String(leadId || ''),
+244:    email: normalizeEmail_(email),
+245:    exp: Math.floor(issuedAt.getTime() / 1000) + 3600,
+246:    nonce: Utilities.getUuid()
+247:  };
+248:  var encoded = publicBase64Encode_(JSON.stringify(claims));
+249:  return encoded + '.' + publicHmac_(encoded, secretOverride);
+250:}
+251:
+252:function verifyPublicWorkflowToken_(token, nowValue, secretOverride) {
+253:  var text = publicPortalText_(token, 4096);
+254:  var parts = text.split('.');
+255:  if (parts.length !== 2 || !publicConstantTimeEquals_(
+256:      publicHmac_(parts[0], secretOverride), parts[1])) {
+257:    throw avodahError_('INVALID_PUBLIC_TOKEN',
+258:      'The consultation session is invalid or has expired.');
+259:  }
+260:  var claims;
+261:  try { claims = JSON.parse(publicBase64Decode_(parts[0])); } catch (error) {
+262:    throw avodahError_('INVALID_PUBLIC_TOKEN',
+263:      'The consultation session is invalid or has expired.');
+264:  }
+265:  var current = nowValue instanceof Date ? nowValue : new Date();
+266:  if (!claims || claims.kind !== 'PUBLIC_BOOKING' ||
+267:      !claims.intake_id || !claims.lead_id ||
+268:      Number(claims.exp || 0) < Math.floor(current.getTime() / 1000)) {
+269:    throw avodahError_('INVALID_PUBLIC_TOKEN',
+270:      'The consultation session is invalid or has expired.');
+271:  }
+272:  return claims;
+273:}
+274:
+275:function publicIntakeResult_(promotion, rowNumber, email, idempotent) {
+276:  return {
+277:    ok: true,
+278:    code: idempotent ? 'PUBLIC_INTAKE_REPLAY' : 'PUBLIC_INTAKE_ACCEPTED',
+279:    submission_id: String(promotion.submissionId || ''),
+280:    intake_id: String(promotion.intakeId || ''),
+281:    lead_id: String(promotion.leadId || ''),
+282:    duplicate_status: String(promotion.duplicateStatus || ''),
+283:    workflow_token: issuePublicWorkflowToken_(promotion.intakeId,
+284:      promotion.leadId, email),
+285:    idempotent: Boolean(idempotent)
+286:  };
+287:}
+288:
+289:function submitPublicIntake(payload) {
+290:  assertPublicPortalEnabled_();
+291:  var normalized = normalizePublicIntakePayload_(payload);
+292:  return withScriptLock_('public intake ' + normalized.submissionId, function() {
+293:    var existingRows = findRowsByHeaderValue_('Intake Submissions',
+294:      'Submission ID', normalized.submissionId);
+295:    if (existingRows.length) {
+296:      var existing = getObjectRow_('Intake Submissions', existingRows[0]);
+297:      if (normalizeEmail_(existing.record['Email Address']) !== normalized.email) {
+298:        throw avodahError_('INVALID_SUBMISSION',
+299:          'The submission could not be accepted.');
+300:      }
+301:      var replay = processIntakeSubmissionByRow_(existingRows[0],
+302:        'PUBLIC_PORTAL_RETRY');
+303:      replay.submissionId = normalized.submissionId;
+304:      return publicIntakeResult_(replay, existingRows[0], normalized.email, true);
+305:    }
+306:    assertPublicRateLimit_('INTAKE', normalized.email, 5, 3600);
+307:    var rowNumber = appendObjectRow_('Intake Submissions', {
+308:      'Submission ID': normalized.submissionId,
+309:      'Submitted At': new Date(),
+310:      'Primary Need': normalized.primaryNeed,
+311:      'Recommended Service Path': '',
+312:      'Consultation Requested': normalized.consultationRequested ? 'Yes' : 'No',
+313:      'Full Name': normalized.fullName,
+314:      'Mobile Number': normalized.rawPhone,
+315:      'Email Address': normalized.email,
+316:      'Location': normalized.location,
+317:      'Preferred Contact Method': normalized.preferredContactMethod,
+318:      'Preferred Schedule': normalized.preferredSchedule,
+319:      'Additional Notes': normalized.additionalNotes,
+320:      'Consent': 'Yes',
+321:      'Follow-up Status': 'New',
+322:      'Submission Metadata': safeJsonStringify_({
+323:        portalVersion: AVODAH_CONFIG.VERSION,
+324:        receivedAt: new Date().toISOString()
+325:      }),
+326:      'Form Source': 'PUBLIC_PORTAL',
+327:      'Source Page': 'PUBLIC_PORTAL',
+328:      'Processing Status': 'PENDING'
+329:    });
+330:    var promotion = processIntakeSubmissionByRow_(rowNumber, 'PUBLIC_PORTAL');
+331:    promotion.submissionId = normalized.submissionId;
+332:    return publicIntakeResult_(promotion, rowNumber, normalized.email, false);
+333:  }, 30000);
+334:}
+335:
+336:function getPublicBookingAvailability() {
+intake_processing_context:
+1:/** Phase 3.1 canonical Intake -> Lead processing. */
+2:
+3:function handleSpreadsheetFormSubmit(event) {
+4:  return runScheduledTask_('handleSpreadsheetFormSubmit', event, function() {
+5:    return processIntakeFormSubmit_(event);
+6:  });
+7:}
+8:
+9:function processIntakeFormSubmit_(event) {
+10:  if (!event || !event.range || typeof event.range.getRow !== 'function') {
+11:    throw avodahError_('INVALID_FORM_EVENT',
+12:      'A spreadsheet form-submit event with a source row is required.');
+13:  }
+14:  var sheet = event.range.getSheet();
+15:  if (!sheet || sheet.getName() !== 'Intake Submissions') {
+16:    throw avodahError_('INVALID_FORM_SHEET',
+17:      'The form-submit trigger must point to Intake Submissions.');
+18:  }
+19:  var rowNumber = event.range.getRow();
+20:  return withScriptLock_('Intake row ' + rowNumber, function() {
+21:    return processIntakeSubmissionByRow_(rowNumber, 'FORM_SUBMIT');
+22:  });
+23:}
+24:
+25:function processIntakeRow(rowNumber) {
+26:  requireUserRole_(['ADMIN', 'MANAGER']);
+27:  return withScriptLock_('Intake row ' + rowNumber, function() {
+28:    return processIntakeSubmissionByRow_(rowNumber, 'MANUAL');
+29:  });
+30:}
+31:
+32:function processPendingIntakes(limit) {
+33:  requireUserRole_(['ADMIN', 'MANAGER']);
+34:  var maximum = Math.min(Math.max(Number(limit || 25), 1), 100);
+35:  var output = withScriptLock_('Pending intake batch', function() {
+36:    var rows = getObjectRows_('Intake Submissions').filter(function(item) {
+37:      return String(item.record['Processing Status'] || '').toUpperCase() !==
+38:        'PROCESSED' || !String(item.record['Lead ID'] || '').trim();
+39:    }).slice(0, maximum);
+40:    var results = [];
+41:    rows.forEach(function(item) {
+42:      try {
+43:        results.push(processIntakeSubmissionByRow_(item.rowNumber, 'MANUAL_BATCH'));
+44:      } catch (error) {
+45:        results.push({
+46:          rowNumber: item.rowNumber,
+47:          status: 'FAILED',
+48:          code: error.code || error.name || 'ERROR',
+49:          message: error.message
+50:        });
+51:      }
+52:    });
+53:    return {
+54:      status: 'COMPLETE',
+55:      recordsRead: rows.length,
+56:      recordsWritten: results.filter(function(item) {
+57:        return item.status === 'PROCESSED';
+58:      }).length,
+59:      failed: results.filter(function(item) { return item.status === 'FAILED'; }).length,
+60:      results: results
+61:    };
+62:  });
+63:  try { console.log(JSON.stringify(output)); } catch (ignored) {}
+64:  return output;
+65:}
+66:
+67:function processIntakeSubmissionByRow_(rowNumber, source) {
+68:  var row = getObjectRow_('Intake Submissions', rowNumber);
+69:  var record = row.record;
+70:  var submissionId = String(record['Submission ID'] || '').trim();
+71:  var intakeId = String(record['Intake ID'] || '').trim() ||
+72:    generateUniqueId_('INTAKE');
+73:  var normalizedEmail = normalizeEmail_(record['Email Address']);
+74:  var normalizedPhone = normalizePhone_(record['Mobile Number']);
+75:  var now = new Date();
+76:
+77:  if (String(record['Processing Status'] || '').toUpperCase() === 'PROCESSED' &&
+78:      String(record['Lead ID'] || '').trim()) {
+79:    return {
+80:      rowNumber: Number(rowNumber),
+81:      status: 'PROCESSED',
+82:      idempotent: true,
+83:      intakeId: intakeId,
+84:      leadId: String(record['Lead ID']).trim(),
+85:      duplicateStatus: String(record['Duplicate Status'] || '')
+86:    };
+87:  }
+88:
+89:  var canonical = {
+90:    'Intake ID': intakeId,
+91:    'Normalized Email': normalizedEmail,
+92:    'Normalized Phone': normalizedPhone,
+93:    'Last Processed At': now
+94:  };
+95:  try {
+96:    validateIntakeRecord_(record, normalizedEmail, normalizedPhone);
+97:    canonical['Processing Status'] = 'PROCESSING';
+98:    updateObjectRow_('Intake Submissions', rowNumber, canonical);
+99:    record['Intake ID'] = intakeId;
+100:    record['Normalized Email'] = normalizedEmail;
+101:    record['Normalized Phone'] = normalizedPhone;
+102:    var actorEmail = '';
+103:    try { actorEmail = getCurrentUserEmail_(); } catch (ignored) {}
+104:    var lead = upsertLeadFromIntake_(record, {
+105:      actorEmail: actorEmail || 'SYSTEM',
+106:      source: source || 'UNKNOWN'
+107:    });
+108:    updateObjectRow_('Intake Submissions', rowNumber, {
+109:      'Intake ID': intakeId,
+110:      'Normalized Email': normalizedEmail,
+111:      'Normalized Phone': normalizedPhone,
+112:      'Lead ID': lead.leadId,
+113:      'Duplicate Status': lead.duplicateStatus,
+114:      'Processing Status': 'PROCESSED',
+115:      'Last Processed At': new Date()
+116:    });
+117:    logAuditEvent_({
+118:      action: lead.created ? 'LEAD_CREATED_FROM_INTAKE' : 'LEAD_UPDATED_FROM_INTAKE',
+119:      entityType: 'LEAD',
+120:      entityId: lead.leadId,
+121:      result: 'SUCCESS',
+122:      details: {
+123:        intakeId: intakeId,
+124:        submissionId: submissionId,
+125:        source: source || 'UNKNOWN',
+126:        duplicateStatus: lead.duplicateStatus,
+127:        inquiryCount: lead.inquiryCount,
+128:        possiblePhoneDuplicate: lead.possiblePhoneDuplicate
+129:      }
+130:    });
+131:    return {
+132:      rowNumber: Number(rowNumber),
+133:      status: 'PROCESSED',
+134:      idempotent: false,
+135:      intakeId: intakeId,
+136:      leadId: lead.leadId,
+137:      leadCreated: lead.created,
+138:      duplicateStatus: lead.duplicateStatus,
+139:      inquiryCount: lead.inquiryCount
+140:    };
+141:  } catch (error) {
+142:    try {
+143:      canonical['Processing Status'] = 'FAILED';
+144:      canonical['Last Processed At'] = new Date();
+145:      updateObjectRow_('Intake Submissions', rowNumber, canonical);
+146:    } catch (updateError) {
+147:      console.error('Unable to mark failed intake row ' + rowNumber + ': ' + updateError);
+148:    }
+149:    try {
+150:      logAuditEvent_({
+151:        action: 'INTAKE_LEAD_PROCESS',
+152:        entityType: 'INTAKE',
+153:        entityId: intakeId,
+154:        result: 'FAILED',
+155:        details: {
+156:          submissionId: submissionId,
+157:          source: source || 'UNKNOWN',
+158:          errorCode: error.code || error.name || 'ERROR',
+159:          errorMessage: error.message
+160:        }
+161:      });
+162:    } catch (logError) {
+163:      console.error('Unable to audit failed intake row ' + rowNumber + ': ' + logError);
+164:    }
+165:    throw error;
+166:  }
+167:}
+168:
+169:function validateIntakeRecord_(record, normalizedEmail, normalizedPhone) {
+170:  if (!String(record['Submission ID'] || '').trim()) {
+171:    throw avodahError_('SUBMISSION_ID_REQUIRED', 'Submission ID is required.');
+172:  }
+173:  parseRequiredDate_(record['Submitted At'], 'Submitted At');
+174:  if (!String(record['Full Name'] || '').trim()) {
+175:    throw avodahError_('FULL_NAME_REQUIRED', 'Full Name is required.');
+176:  }
+177:  if (!isConsentGranted_(record['Consent'])) {
+178:    throw avodahError_('CONSENT_REQUIRED',
+179:      'Consent must be explicitly granted before lead processing.');
+180:  }
+write_operations_performed=no
