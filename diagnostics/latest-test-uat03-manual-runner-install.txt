@@ -1,0 +1,12 @@
+TEST UAT-03 manual runner install
+commit=ab548b4f75a31244bccb4951c11e3d151496359b
+utc=2026-07-23T16:32:01Z
+runner_file=UAT03Manual.gs
+runner_function=runPhase6Uat03Manual
+safety_reset_function=resetPhase6Uat03SafetyGates
+live_source_push=success
+deployment_changed=no
+script_properties_changed=no
+spreadsheet_changed=no
+calendar_changed=no
+production_touched=no
