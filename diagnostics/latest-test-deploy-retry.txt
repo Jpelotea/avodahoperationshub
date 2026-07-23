@@ -1,9 +1,9 @@
 TEST Apps Script v1.1.1 retry result
-commit=fc7d915b1ad3aab7dbb0baf229c555f2d789b43c
-utc=2026-07-23T08:11:41Z
+commit=be9e210d83ba1b62f8349a2178d0fd06517ccfd9
+utc=2026-07-23T08:46:06Z
 install_clasp=success
-auth=failure
-pull=skipped
+auth=success
+pull=failure
 harden=skipped
 verify=skipped
 push_source=skipped
