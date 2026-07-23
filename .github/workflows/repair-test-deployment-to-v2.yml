@@ -1,0 +1,106 @@
+name: Repair TEST Deployment to v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/repair-test-deployment-to-v2.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure clasp
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+
+      - name: Verify Apps Script version 2 exists
+        id: version_check
+        shell: bash
+        run: |
+          set -euo pipefail
+          clasp versions > /tmp/versions.txt
+          grep -Eq '(^|[^0-9])2([^0-9]|$)' /tmp/versions.txt
+
+      - name: Update existing TEST deployment to version 2
+        id: redeploy
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          clasp update-deployment "$DEPLOYMENT_ID" --versionNumber 2 --description "TEST v1.1.1 - modular management-token Calendar exposure hardened; all write gates disabled"
+
+      - name: Verify deployment is exactly version 2
+        id: verify
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          clasp deployments > /tmp/deployments.txt
+          grep "$DEPLOYMENT_ID" /tmp/deployments.txt > /tmp/target-deployment.txt
+          grep -Eq '@2([^0-9]|$)' /tmp/target-deployment.txt
+
+      - name: Record repair result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VERSION_CHECK: ${{ steps.version_check.outcome }}
+          REDEPLOY: ${{ steps.redeploy.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-deployment-v2-repair.txt"
+          TARGET="unknown"
+          if [ -s /tmp/target-deployment.txt ]; then TARGET="$(cat /tmp/target-deployment.txt)"; fi
+          cat > "$REPORT" <<EOF
+          TEST deployment v2 repair
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          version_2_exists=${VERSION_CHECK}
+          deployment_update=${REDEPLOY}
+          deployment_verify_at_2=${VERIFY}
+          target_deployment=${TARGET}
+          source_push_performed=no
+          new_version_created=no
+          EOF
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST deployment v2 repair" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST deployment v2 repair" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
