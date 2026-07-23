@@ -1,0 +1,184 @@
+name: Install TEST UAT-03 Cancelled Run Cleanup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/install-test-uat03-cancelled-run-cleanup.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node and clasp
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull live TEST source and install cancelled-run cleanup
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/UAT03Manual.gs
+
+          if ! grep -q '^function cleanupPhase6Uat03CancelledRun[[:space:]]*(' src/UAT03Manual.gs; then
+            cat >> src/UAT03Manual.gs <<'GS'
+
+          /**
+           * TEST-only recovery for the interrupted UAT-03 booking run.
+           * Targets only BOOK-20260724-023249-58eca84610 and restores a safe inactive state.
+           */
+          function cleanupPhase6Uat03CancelledRun() {
+            var props = PropertiesService.getScriptProperties();
+            var ss = getHubSpreadsheet_();
+            if (getEnvironment_() !== 'TEST') {
+              throw avodahError_('UAT03_TEST_ONLY', 'Cancelled-run cleanup may run only in TEST.');
+            }
+            if (ss.getId() !== '1f8rZ8hVxMnrrFwnfezMhG1CklxDizdtC2IRvEnbC13s') {
+              throw avodahError_('UAT03_SPREADSHEET_MISMATCH', 'Wrong TEST spreadsheet.');
+            }
+
+            var bookingId = 'BOOK-20260724-023249-58eca84610';
+            var config = getBookingRuntimeConfig_();
+            var item = findCurrentBookingByField_('Booking ID', bookingId, config);
+            if (!item) {
+              props.setProperties({
+                PUBLIC_PORTAL_ENABLED: 'FALSE',
+                ENABLE_BOOKING_WORKFLOW: 'FALSE',
+                ENABLE_CALENDAR_WRITES: 'FALSE'
+              }, false);
+              return {ok: true, code: 'UAT03_CANCELLED_RUN_ALREADY_ABSENT', bookingId: bookingId};
+            }
+
+            var eventId = String(item.record['Google Event ID'] || '');
+            var eventDeleted = false;
+            try {
+              if (eventId) {
+                var event = readBookingCalendarEvent_(config, eventId);
+                if (event) {
+                  props.setProperties({
+                    PUBLIC_PORTAL_ENABLED: 'FALSE',
+                    ENABLE_BOOKING_WORKFLOW: 'TRUE',
+                    ENABLE_CALENDAR_WRITES: 'TRUE'
+                  }, false);
+                  var deletion = deleteBookingCalendarEvent_(config, eventId);
+                  eventDeleted = Boolean(deletion && deletion.ok);
+                }
+              }
+
+              updateObjectRow_('Booking Database', item.rowNumber, {
+                'Status': 'Cancelled',
+                'Cancellation Reason': 'Phase 6 UAT-03 cancelled execution recovery',
+                'Updated At': new Date(),
+                'Last Reconciled': new Date(),
+                'Reconciliation Status': 'OK',
+                'Last Error': '',
+                'Record Status': 'INACTIVE',
+                'Management Token Hash': ''
+              });
+
+              var log = findCalendarLogBooking_(bookingId);
+              if (log) {
+                updateObjectRow_('Calendar Log', log.rowNumber, {
+                  'Status': 'Cancelled',
+                  'Sync Status': 'Synced',
+                  'Last Synced': new Date(),
+                  'Sync Error': '',
+                  'Record Status': 'Archived',
+                  'Updated At': new Date()
+                });
+              }
+
+              clearBookingSourceAppointment_(item.record);
+              try {
+                auditBookingAction_({
+                  requestId: 'uat03-cancelled-run-cleanup-' + Utilities.getUuid(),
+                  bookingId: bookingId,
+                  leadId: String(item.record['Lead ID'] || ''),
+                  action: 'UAT03_CANCELLED_RUN_CLEANUP',
+                  result: 'SUCCESS',
+                  details: {eventDeleted: eventDeleted}
+                });
+              } catch (ignoredAudit) {}
+
+              props.deleteProperty('UAT03_MANUAL_COMPLETED');
+              return {
+                ok: true,
+                code: 'UAT03_CANCELLED_RUN_CLEANED',
+                bookingId: bookingId,
+                eventDeleted: eventDeleted,
+                tokenHashCleared: true,
+                sourceLinksCleared: true
+              };
+            } finally {
+              props.setProperties({
+                PUBLIC_PORTAL_ENABLED: 'FALSE',
+                ENABLE_BOOKING_WORKFLOW: 'FALSE',
+                ENABLE_CALENDAR_WRITES: 'FALSE'
+              }, false);
+            }
+          }
+          GS
+          fi
+
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+
+          cat > diagnostics/latest-test-uat03-cancelled-run-cleanup-install.txt <<EOF
+          TEST UAT-03 cancelled run cleanup install
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cleanup_function=cleanupPhase6Uat03CancelledRun
+          live_source_push=success
+          deployment_changed=no
+          script_properties_changed=no
+          spreadsheet_changed=no
+          calendar_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized install result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-cancelled-run-cleanup-install.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 cancelled-run cleanup install" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 cancelled-run cleanup install" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
