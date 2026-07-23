@@ -1,0 +1,76 @@
+name: Verify TEST UAT-02 Manual Runner Live
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/verify-test-uat02-manual-runner-live.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST Apps Script source and verify runner
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          FILE_PRESENT=no
+          FUNCTION_PRESENT=no
+          if [ -f src/UAT02Manual.gs ]; then FILE_PRESENT=yes; fi
+          if grep -R -q '^function runPhase6Uat02Manual[[:space:]]*(' src/*.gs 2>/dev/null; then FUNCTION_PRESENT=yes; fi
+
+          REPORT="diagnostics/latest-test-uat02-manual-runner-live-verification.txt"
+          {
+            echo "TEST UAT-02 manual runner live verification"
+            echo "commit=${GITHUB_SHA}"
+            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "uat02manual_file_present=${FILE_PRESENT}"
+            echo "runPhase6Uat02Manual_function_present=${FUNCTION_PRESENT}"
+            echo "live_source_files:"
+            find src -maxdepth 1 -type f -printf '%f\n' | sort
+            echo "write_operations_performed=no"
+            echo "production_touched=no"
+          } > "$REPORT"
+
+      - name: Publish sanitized verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat02-manual-runner-live-verification.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-02 manual runner live verification" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-02 manual runner live verification" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
