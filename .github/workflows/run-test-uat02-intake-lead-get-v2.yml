@@ -1,0 +1,458 @@
+name: Run TEST UAT-02 Intake to Lead GET V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/run-test-uat02-intake-lead-get-v2.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  uat02:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node and clasp
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Preserve hardened TEST source
+        id: preserve
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src original-src
+          mkdir -p src
+          clasp pull >/dev/null
+          cp -R src original-src
+          test -f src/Code.gs
+          test -f src/WebApp.gs
+          test -f src/Intake.gs
+          test -f src/Leads.gs
+
+      - name: Build one-time GET UAT runner
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(openssl rand -hex 32)"
+          printf '%s' "$TOKEN" > /tmp/uat02-get-token
+          chmod 600 /tmp/uat02-get-token
+          TOKEN_HASH="$(printf '%s' "$TOKEN" | sha256sum | awk '{print $1}')"
+
+          cat > src/UAT02GetRunner.gs <<'GS'
+          var UAT02_GET_TOKEN_SHA256_ = '__TOKEN_HASH__';
+
+          function uat02GetSha256Hex_(value) {
+            var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+              String(value || ''), Utilities.Charset.UTF_8);
+            return bytes.map(function(item) {
+              var number = item < 0 ? item + 256 : item;
+              return ('0' + number.toString(16)).slice(-2);
+            }).join('');
+          }
+
+          function uat02GetAuthorized_(token) {
+            var actual = uat02GetSha256Hex_(token);
+            return actual === UAT02_GET_TOKEN_SHA256_;
+          }
+
+          function uat02GetGate_(name) {
+            return String(PropertiesService.getScriptProperties().getProperty(name) || '')
+              .trim().toUpperCase() === 'TRUE';
+          }
+
+          function handleUat02Get_(params) {
+            params = params || {};
+            if (!uat02GetAuthorized_(params.uat02_token)) {
+              return {ok:false, code:'UNAUTHORIZED'};
+            }
+            if (getEnvironment_() !== 'TEST') {
+              return {ok:false, code:'TEST_ONLY'};
+            }
+            var spreadsheet = getHubSpreadsheet_();
+            if (spreadsheet.getId() !== '1f8rZ8hVxMnrrFwnfezMhG1CklxDizdtC2IRvEnbC13s' ||
+                !/^TEST(?:\s|-)/i.test(spreadsheet.getName())) {
+              return {ok:false, code:'SPREADSHEET_MISMATCH'};
+            }
+            var mode = String(params.uat02_mode || 'probe').trim().toLowerCase();
+            if (mode === 'probe') {
+              return {
+                ok:true,
+                code:'UAT02_GET_READY_V2',
+                public_portal_enabled:uat02GetGate_('PUBLIC_PORTAL_ENABLED'),
+                booking_workflow_enabled:uat02GetGate_('ENABLE_BOOKING_WORKFLOW'),
+                calendar_writes_enabled:uat02GetGate_('ENABLE_CALENDAR_WRITES')
+              };
+            }
+            if (mode === 'cleanup') {
+              PropertiesService.getScriptProperties().setProperty('PUBLIC_PORTAL_ENABLED', 'FALSE');
+              return {
+                ok:true,
+                code:'UAT02_GET_CLEANED_V2',
+                public_portal_enabled:uat02GetGate_('PUBLIC_PORTAL_ENABLED'),
+                booking_workflow_enabled:uat02GetGate_('ENABLE_BOOKING_WORKFLOW'),
+                calendar_writes_enabled:uat02GetGate_('ENABLE_CALENDAR_WRITES')
+              };
+            }
+            if (mode !== 'run') {
+              return {ok:false, code:'INVALID_MODE'};
+            }
+            return runUat02GetV2_(params);
+          }
+
+          function runUat02GetV2_(params) {
+            var props = PropertiesService.getScriptProperties();
+            if (uat02GetGate_('PUBLIC_PORTAL_ENABLED')) {
+              throw avodahError_('UAT02_PORTAL_NOT_BASELINE_FALSE',
+                'PUBLIC_PORTAL_ENABLED must be FALSE before UAT-02.');
+            }
+            if (uat02GetGate_('ENABLE_BOOKING_WORKFLOW') ||
+                uat02GetGate_('ENABLE_CALENDAR_WRITES')) {
+              throw avodahError_('UAT02_UNSAFE_GATE_STATE',
+                'Booking and Calendar write gates must remain FALSE.');
+            }
+
+            var submissionId = String(params.submission_id || '').trim();
+            var email = normalizeEmail_(params.email || '');
+            var phone = String(params.phone || '').trim();
+            if (!submissionId || !email) {
+              throw avodahError_('UAT02_INPUT_REQUIRED', 'Controlled submission ID and email are required.');
+            }
+            if (findRowsByHeaderValue_('Intake Submissions', 'Submission ID', submissionId).length) {
+              throw avodahError_('UAT02_SUBMISSION_ALREADY_EXISTS', 'Controlled submission ID already exists.');
+            }
+
+            var payload = {
+              submission_id: submissionId,
+              full_name: 'UAT 02 Controlled Test Inquiry V2',
+              email: email,
+              mobile_number: phone,
+              location: 'Butuan City',
+              primary_need: 'UAT-02 Intake to Lead lifecycle verification',
+              preferred_contact_method: 'Email',
+              preferred_schedule: 'UAT only - no booking requested',
+              additional_notes: 'Controlled TEST fixture for Phase 6 UAT-02.',
+              consultation_requested: false,
+              consent: true,
+              website: ''
+            };
+
+            props.setProperty('PUBLIC_PORTAL_ENABLED', 'TRUE');
+            try {
+              var first = submitPublicIntake(payload);
+              var second = submitPublicIntake(payload);
+              var intakeRows = findRowsByHeaderValue_('Intake Submissions', 'Submission ID', submissionId);
+              if (intakeRows.length !== 1) {
+                throw avodahError_('UAT02_INTAKE_COUNT', 'Expected exactly one Intake row.');
+              }
+              var intakeRecord = getObjectRow_('Intake Submissions', intakeRows[0]).record;
+              var leadId = String(intakeRecord['Lead ID'] || '').trim();
+              var intakeId = String(intakeRecord['Intake ID'] || '').trim();
+              if (!leadId || !intakeId) {
+                throw avodahError_('UAT02_LINK_MISSING', 'Intake ID or Lead ID is missing.');
+              }
+              var leadRows = findRowsByHeaderValue_('Lead Database', 'Lead ID', leadId);
+              var leadEmailRows = findRowsByHeaderValue_('Lead Database', 'Normalized Email', email);
+              if (leadRows.length !== 1 || leadEmailRows.length !== 1) {
+                throw avodahError_('UAT02_LEAD_COUNT', 'Expected exactly one logical Lead.');
+              }
+              var leadRecord = getObjectRow_('Lead Database', leadRows[0]).record;
+              var expectedPhone = normalizePhone_(phone);
+              var checks = {
+                first_accepted:first.code === 'PUBLIC_INTAKE_ACCEPTED' && first.idempotent === false,
+                replay_idempotent:second.code === 'PUBLIC_INTAKE_REPLAY' && second.idempotent === true,
+                same_intake:String(first.intake_id || '') === String(second.intake_id || '') && String(first.intake_id || '') === intakeId,
+                same_lead:String(first.lead_id || '') === String(second.lead_id || '') && String(first.lead_id || '') === leadId,
+                intake_count_one:intakeRows.length === 1,
+                lead_count_one:leadRows.length === 1 && leadEmailRows.length === 1,
+                processing_complete:String(intakeRecord['Processing Status'] || '').trim().toUpperCase() === 'PROCESSED',
+                normalized_email:normalizeEmail_(intakeRecord['Normalized Email']) === email,
+                normalized_phone:normalizePhone_(intakeRecord['Normalized Phone']) === expectedPhone,
+                intake_follow_up_new:String(intakeRecord['Follow-up Status'] || '').trim().toUpperCase() === 'NEW',
+                lead_follow_up_new:String(leadRecord['Follow-up Status'] || '').trim().toUpperCase() === 'NEW',
+                lead_email:normalizeEmail_(leadRecord['Normalized Email']) === email,
+                lead_phone:normalizePhone_(leadRecord['Normalized Phone']) === expectedPhone,
+                booking_gate_false:!uat02GetGate_('ENABLE_BOOKING_WORKFLOW'),
+                calendar_gate_false:!uat02GetGate_('ENABLE_CALENDAR_WRITES')
+              };
+              var failures = Object.keys(checks).filter(function(key) { return !checks[key]; });
+              if (failures.length) {
+                throw avodahError_('UAT02_ASSERTION_FAILED', failures.join(','));
+              }
+              return {
+                ok:true,
+                code:'UAT02_PASS_V2',
+                intake_rows_created:1,
+                lead_rows_linked:1,
+                first_result:first.code,
+                replay_result:second.code,
+                normalized_email_ok:checks.normalized_email,
+                normalized_phone_ok:checks.normalized_phone,
+                intake_follow_up_ok:checks.intake_follow_up_new,
+                lead_follow_up_ok:checks.lead_follow_up_new,
+                booking_workflow_enabled:uat02GetGate_('ENABLE_BOOKING_WORKFLOW'),
+                calendar_writes_enabled:uat02GetGate_('ENABLE_CALENDAR_WRITES')
+              };
+            } finally {
+              props.setProperty('PUBLIC_PORTAL_ENABLED', 'FALSE');
+            }
+          }
+          GS
+          sed -i "s/__TOKEN_HASH__/$TOKEN_HASH/g" src/UAT02GetRunner.gs
+
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/Code.gs')
+          text = path.read_text(encoding='utf-8')
+          marker = 'function doGet(e) {'
+          idx = text.find(marker)
+          if idx < 0:
+              raise SystemExit('Could not locate doGet')
+          brace = text.find('\n', idx) + 1
+          insert = '''  if (e && e.parameter && e.parameter.uat02_mode && typeof handleUat02Get_ === "function") {\n    return jsonResponse_(handleUat02Get_(e.parameter));\n  }\n'''
+          text = text[:brace] + insert + text[brace:]
+          path.write_text(text, encoding='utf-8')
+          PY
+          for f in src/*.gs; do node --check < "$f"; done
+
+      - name: Deploy temporary UAT version and verify pointer
+        id: deploy
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          clasp push --force >/dev/null
+          OUTPUT="$(clasp version 'TEMP TEST UAT-02 GET V2; restore to @2')"
+          VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
+          test -n "$VERSION"
+          printf '%s' "$VERSION" > /tmp/uat02-get-version
+          clasp update-deployment "$DEPLOYMENT_ID" --versionNumber "$VERSION" --description "TEMP TEST UAT-02 GET V2; restore to @2" >/dev/null
+          clasp deployments > /tmp/uat02-get-deployments.txt
+          grep "$DEPLOYMENT_ID" /tmp/uat02-get-deployments.txt > /tmp/uat02-get-target.txt
+          grep -Eq "@${VERSION}([^0-9]|$)" /tmp/uat02-get-target.txt
+          echo yes > /tmp/uat02-pointer-verified
+
+      - name: Wait for temporary GET marker before any write
+        id: marker
+        shell: bash
+        env:
+          WEBAPP_URL: https://script.google.com/macros/s/AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS/exec
+        run: |
+          set -euo pipefail
+          TOKEN="$(cat /tmp/uat02-get-token)"
+          MARKER_OK=0
+          for attempt in $(seq 1 90); do
+            CODE="$(curl -sS -L -o /tmp/uat02-get-probe.json -w '%{http_code}' -G \
+              --data-urlencode "uat02_mode=probe" \
+              --data-urlencode "uat02_token=$TOKEN" \
+              --data-urlencode "cache_buster=${GITHUB_RUN_ID}-${attempt}" \
+              "$WEBAPP_URL" || true)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .code == "UAT02_GET_READY_V2" and .public_portal_enabled == false and .booking_workflow_enabled == false and .calendar_writes_enabled == false' /tmp/uat02-get-probe.json >/dev/null 2>&1; then
+              MARKER_OK=1
+              break
+            fi
+            sleep 5
+          done
+          test "$MARKER_OK" -eq 1
+          echo yes > /tmp/uat02-marker-seen
+
+      - name: Execute controlled UAT-02 through GET runner
+        id: execute
+        shell: bash
+        env:
+          WEBAPP_URL: https://script.google.com/macros/s/AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS/exec
+        run: |
+          set -euo pipefail
+          TOKEN="$(cat /tmp/uat02-get-token)"
+          SUBMISSION_ID="$(python - <<'PY'
+          import uuid
+          print(uuid.uuid4())
+          PY
+          )"
+          EMAIL="uat02v2.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}@example.com"
+          PHONE="$(python - <<'PY'
+          import os
+          n = int(os.environ.get('GITHUB_RUN_ID','1')) % 10000000
+          print('+63917' + f'{n:07d}')
+          PY
+          )"
+          CODE="$(curl -sS -L -o /tmp/uat02-get-result.json -w '%{http_code}' -G \
+            --data-urlencode "uat02_mode=run" \
+            --data-urlencode "uat02_token=$TOKEN" \
+            --data-urlencode "submission_id=$SUBMISSION_ID" \
+            --data-urlencode "email=$EMAIL" \
+            --data-urlencode "phone=$PHONE" \
+            --data-urlencode "cache_buster=${GITHUB_RUN_ID}-run" \
+            "$WEBAPP_URL" || true)"
+          test "$CODE" = 200
+          jq -e '
+            .ok == true and
+            .code == "UAT02_PASS_V2" and
+            .intake_rows_created == 1 and
+            .lead_rows_linked == 1 and
+            .first_result == "PUBLIC_INTAKE_ACCEPTED" and
+            .replay_result == "PUBLIC_INTAKE_REPLAY" and
+            .normalized_email_ok == true and
+            .normalized_phone_ok == true and
+            .intake_follow_up_ok == true and
+            .lead_follow_up_ok == true and
+            .booking_workflow_enabled == false and
+            .calendar_writes_enabled == false
+          ' /tmp/uat02-get-result.json >/dev/null
+
+      - name: Fail-closed gate cleanup through GET runner
+        id: gate_cleanup
+        if: always()
+        shell: bash
+        env:
+          WEBAPP_URL: https://script.google.com/macros/s/AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS/exec
+        run: |
+          set -euo pipefail
+          if [ ! -f /tmp/uat02-get-token ] || [ ! -f /tmp/uat02-marker-seen ]; then
+            echo not_applicable > /tmp/uat02-gate-cleanup-status
+            exit 0
+          fi
+          TOKEN="$(cat /tmp/uat02-get-token)"
+          CLEANED=0
+          for attempt in $(seq 1 20); do
+            CODE="$(curl -sS -L -o /tmp/uat02-get-cleanup.json -w '%{http_code}' -G \
+              --data-urlencode "uat02_mode=cleanup" \
+              --data-urlencode "uat02_token=$TOKEN" \
+              --data-urlencode "cache_buster=${GITHUB_RUN_ID}-cleanup-${attempt}" \
+              "$WEBAPP_URL" || true)"
+            if [ "$CODE" = 200 ] && jq -e '.ok == true and .code == "UAT02_GET_CLEANED_V2" and .public_portal_enabled == false and .booking_workflow_enabled == false and .calendar_writes_enabled == false' /tmp/uat02-get-cleanup.json >/dev/null 2>&1; then
+              CLEANED=1
+              break
+            fi
+            sleep 3
+          done
+          test "$CLEANED" -eq 1
+          echo yes > /tmp/uat02-gate-cleanup-status
+
+      - name: Restore hardened source and deployment at 2
+        id: restore
+        if: always()
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          rm -rf src
+          cp -R original-src src
+          clasp push --force >/dev/null
+          clasp update-deployment "$DEPLOYMENT_ID" --versionNumber 2 --description "TEST v1.1.1 - modular management-token Calendar exposure hardened; all write gates disabled" >/dev/null
+          clasp deployments > /tmp/uat02-get-restore-deployments.txt
+          grep "$DEPLOYMENT_ID" /tmp/uat02-get-restore-deployments.txt > /tmp/uat02-get-restore-target.txt
+          grep -Eq '@2([^0-9]|$)' /tmp/uat02-get-restore-target.txt
+          echo yes > /tmp/uat02-restore-status
+
+      - name: Publish sanitized UAT result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PRESERVE: ${{ steps.preserve.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          DEPLOY: ${{ steps.deploy.outcome }}
+          MARKER: ${{ steps.marker.outcome }}
+          EXECUTE: ${{ steps.execute.outcome }}
+          GATE_CLEANUP: ${{ steps.gate_cleanup.outcome }}
+          RESTORE: ${{ steps.restore.outcome }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat02-get-v2-result.txt"
+          VERSION="not_created"
+          [ -f /tmp/uat02-get-version ] && VERSION="$(cat /tmp/uat02-get-version)"
+          POINTER="no"
+          [ -f /tmp/uat02-pointer-verified ] && POINTER="$(cat /tmp/uat02-pointer-verified)"
+          MARKER_SEEN="no"
+          [ -f /tmp/uat02-marker-seen ] && MARKER_SEEN="$(cat /tmp/uat02-marker-seen)"
+          GATE_CLEANED="unknown"
+          [ -f /tmp/uat02-gate-cleanup-status ] && GATE_CLEANED="$(cat /tmp/uat02-gate-cleanup-status)"
+          RESTORED="no"
+          [ -f /tmp/uat02-restore-status ] && RESTORED="$(cat /tmp/uat02-restore-status)"
+          RESULT_CODE="unknown"
+          INTAKE_ROWS="unknown"
+          LEAD_ROWS="unknown"
+          FIRST_RESULT="unknown"
+          REPLAY_RESULT="unknown"
+          NORMALIZED_EMAIL="unknown"
+          NORMALIZED_PHONE="unknown"
+          INTAKE_FOLLOWUP="unknown"
+          LEAD_FOLLOWUP="unknown"
+          if [ -s /tmp/uat02-get-result.json ]; then
+            RESULT_CODE="$(jq -r '.code // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            INTAKE_ROWS="$(jq -r '.intake_rows_created // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            LEAD_ROWS="$(jq -r '.lead_rows_linked // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            FIRST_RESULT="$(jq -r '.first_result // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            REPLAY_RESULT="$(jq -r '.replay_result // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            NORMALIZED_EMAIL="$(jq -r '.normalized_email_ok // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            NORMALIZED_PHONE="$(jq -r '.normalized_phone_ok // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            INTAKE_FOLLOWUP="$(jq -r '.intake_follow_up_ok // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+            LEAD_FOLLOWUP="$(jq -r '.lead_follow_up_ok // "unknown"' /tmp/uat02-get-result.json 2>/dev/null || echo unknown)"
+          fi
+          cat > "$REPORT" <<EOF
+          TEST UAT-02 Intake to Lead GET V2 result
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          preserve_hardened_source=${PRESERVE}
+          build_get_runner=${BUILD}
+          deploy_temp_version=${DEPLOY}
+          temporary_apps_script_version=${VERSION}
+          deployment_pointer_verified_at_temp=${POINTER}
+          temp_endpoint_marker_step=${MARKER}
+          temp_endpoint_marker_seen=${MARKER_SEEN}
+          execute_uat02=${EXECUTE}
+          result_code=${RESULT_CODE}
+          intake_rows_created=${INTAKE_ROWS}
+          lead_rows_linked=${LEAD_ROWS}
+          first_result=${FIRST_RESULT}
+          replay_result=${REPLAY_RESULT}
+          normalized_email_ok=${NORMALIZED_EMAIL}
+          normalized_phone_ok=${NORMALIZED_PHONE}
+          intake_follow_up_ok=${INTAKE_FOLLOWUP}
+          lead_follow_up_ok=${LEAD_FOLLOWUP}
+          gate_cleanup_step=${GATE_CLEANUP}
+          public_portal_gate_cleaned=${GATE_CLEANED}
+          restore_hardened_source_and_at_2=${RESTORE}
+          deployment_restored_at_2=${RESTORED}
+          production_touched=no
+          raw_tokens_or_workflow_tokens_recorded=no
+          EOF
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-02 GET V2 result" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-02 GET V2 result" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
