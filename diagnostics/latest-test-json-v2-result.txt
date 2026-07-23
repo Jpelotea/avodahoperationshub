@@ -1,14 +1,12 @@
 TEST Apps Script v1.1.1 JSON V2 deployment result
-commit=a2d4a785830e5c6047513963715b8ff4af7331a5
-utc=2026-07-23T09:06:41Z
+commit=be9c56d642f5cb90a1188fb7b21110b5b2007621
+utc=2026-07-23T09:18:43Z
 install=success
 auth=success
 pull=success
 harden=success
 verify=success
-push_source=failure
-version=skipped
-redeploy=skipped
-apps_script_version=
-push_error:
-User has not enabled the Apps Script API. Enable it by visiting https://script.google.com/home/usersettings then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.
+push_source=success
+version=success
+redeploy=success
+apps_script_version=2
