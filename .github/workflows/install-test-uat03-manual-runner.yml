@@ -1,0 +1,431 @@
+name: Install TEST UAT-03 Manual Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/install-test-uat03-manual-runner.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node and clasp
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull live TEST source and install manual UAT-03 runner
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          cat > src/UAT03Manual.gs <<'GS'
+          /**
+           * Phase 6 UAT-03 manual TEST-only booking lifecycle runner.
+           * Creates one controlled TEST booking, reschedules it, cancels it,
+           * verifies v1.1.1 security behavior, reconciles it, and restores gates.
+           */
+          function runPhase6Uat03Manual() {
+            var props = PropertiesService.getScriptProperties();
+            var spreadsheet = getHubSpreadsheet_();
+            var bookingId = '';
+            var eventId = '';
+            var config = null;
+            var completed = false;
+
+            function gate_(name) {
+              return String(props.getProperty(name) || '').trim().toUpperCase() === 'TRUE';
+            }
+            function assert_(condition, code, message) {
+              if (!condition) throw avodahError_(code, message);
+            }
+            function findSecondAvailableStart_(availability, currentStart) {
+              var current = String(currentStart || '');
+              var days = (availability && availability.days) || [];
+              for (var d = 0; d < days.length; d += 1) {
+                var slots = days[d].slots || [];
+                for (var s = 0; s < slots.length; s += 1) {
+                  if (String(slots[s].start || '') !== current) return String(slots[s].start || '');
+                }
+              }
+              return '';
+            }
+            function extractToken_(url) {
+              var text = String(url || '').trim();
+              if (!text) return '';
+              var queryIndex = text.indexOf('?');
+              var query = queryIndex >= 0 ? text.substring(queryIndex + 1) : '';
+              var hashIndex = query.indexOf('#');
+              if (hashIndex >= 0) query = query.substring(0, hashIndex);
+              var preferred = ['management_token', 'managementToken', 'token', 'manage', 'key'];
+              var values = {};
+              query.split('&').forEach(function(part) {
+                if (!part) return;
+                var eq = part.indexOf('=');
+                var key = decodeURIComponent(eq >= 0 ? part.substring(0, eq) : part);
+                var value = decodeURIComponent(eq >= 0 ? part.substring(eq + 1) : '');
+                values[key] = value;
+              });
+              for (var i = 0; i < preferred.length; i += 1) {
+                if (values[preferred[i]]) return String(values[preferred[i]]);
+              }
+              var keys = Object.keys(values);
+              for (var j = 0; j < keys.length; j += 1) {
+                var keyName = keys[j];
+                if (/^(view|mode|action)$/i.test(keyName)) continue;
+                if (String(values[keyName] || '').length >= 20) return String(values[keyName]);
+              }
+              return '';
+            }
+            function publicHasInternalIds_(value) {
+              var obj = value || {};
+              return Object.prototype.hasOwnProperty.call(obj, 'lead_id') ||
+                Object.prototype.hasOwnProperty.call(obj, 'intake_id') ||
+                Object.prototype.hasOwnProperty.call(obj, 'event_id');
+            }
+            function bestEffortCleanup_() {
+              try {
+                if (!bookingId) return;
+                config = config || getBookingRuntimeConfig_();
+                var item = findCurrentBookingByField_('Booking ID', bookingId, config);
+                if (!item) return;
+                var currentEventId = String(item.record['Google Event ID'] || eventId || '');
+                if (currentEventId && gate_('ENABLE_BOOKING_WORKFLOW') && gate_('ENABLE_CALENDAR_WRITES')) {
+                  try { deleteBookingCalendarEvent_(config, currentEventId); } catch (ignoredDelete) {}
+                }
+                try {
+                  updateObjectRow_('Booking Database', item.rowNumber, {
+                    'Status': 'Cancelled',
+                    'Cancellation Reason': 'UAT-03 automatic failure cleanup',
+                    'Updated At': new Date(),
+                    'Last Reconciled': new Date(),
+                    'Reconciliation Status': 'OK',
+                    'Last Error': '',
+                    'Record Status': 'INACTIVE',
+                    'Management Token Hash': ''
+                  });
+                } catch (ignoredRegistry) {}
+                try {
+                  var log = findCalendarLogBooking_(bookingId);
+                  if (log) {
+                    updateObjectRow_('Calendar Log', log.rowNumber, {
+                      'Status': 'Cancelled', 'Sync Status': 'Synced',
+                      'Last Synced': new Date(), 'Sync Error': '',
+                      'Record Status': 'Archived', 'Updated At': new Date()
+                    });
+                  }
+                } catch (ignoredLog) {}
+                try { clearBookingSourceAppointment_(item.record); } catch (ignoredLinks) {}
+              } catch (ignoredCleanup) {}
+            }
+
+            assert_(getEnvironment_() === 'TEST', 'UAT03_TEST_ONLY',
+              'UAT-03 may run only in TEST.');
+            assert_(spreadsheet.getId() === '1f8rZ8hVxMnrrFwnfezMhG1CklxDizdtC2IRvEnbC13s' &&
+              /^TEST(?:\s|-)/i.test(spreadsheet.getName()), 'UAT03_SPREADSHEET_MISMATCH',
+              'UAT-03 is bound to the approved TEST spreadsheet only.');
+            assert_(!gate_('PUBLIC_PORTAL_ENABLED') && !gate_('ENABLE_BOOKING_WORKFLOW') &&
+              !gate_('ENABLE_CALENDAR_WRITES'), 'UAT03_BASELINE_GATES_NOT_FALSE',
+              'PUBLIC_PORTAL_ENABLED, ENABLE_BOOKING_WORKFLOW, and ENABLE_CALENDAR_WRITES must all be FALSE before UAT-03.');
+            assert_(String(props.getProperty('UAT03_MANUAL_COMPLETED') || '') !== 'TRUE',
+              'UAT03_ALREADY_COMPLETED', 'The controlled UAT-03 runtime test has already passed.');
+
+            var intakeId = 'INT-20260723-235320-dc9877b4fd';
+            var leadId = 'LEAD-20260723-235323-73ee121377';
+            config = getBookingRuntimeConfig_();
+            assert_(config.environment === 'TEST', 'UAT03_CONFIG_NOT_TEST',
+              'Booking runtime configuration is not TEST.');
+            assert_(config.sendGuestInvites === false, 'UAT03_GUEST_INVITES_NOT_FALSE',
+              'SEND_GUEST_INVITES must remain FALSE for controlled UAT.');
+            assert_(!findActiveBookingForLead_(leadId, config), 'UAT03_ACTIVE_BOOKING_EXISTS',
+              'The controlled UAT Lead already has an active booking.');
+
+            var availability = getBookingAvailability_();
+            var initialStart = findSecondAvailableStart_(availability, '');
+            assert_(availability && availability.ok && initialStart, 'UAT03_NO_AVAILABLE_SLOT',
+              'No safe TEST booking slot is currently available.');
+
+            props.setProperties({
+              PUBLIC_PORTAL_ENABLED: 'TRUE',
+              ENABLE_BOOKING_WORKFLOW: 'TRUE',
+              ENABLE_CALENDAR_WRITES: 'TRUE'
+            }, false);
+
+            try {
+              assert_(gate_('PUBLIC_PORTAL_ENABLED') && gate_('ENABLE_BOOKING_WORKFLOW') &&
+                gate_('ENABLE_CALENDAR_WRITES'), 'UAT03_GATE_ENABLE_FAILED',
+                'Required TEST booking gates could not be enabled.');
+
+              var createResult = createConsultationBooking_({
+                intake_id: intakeId,
+                lead_id: leadId,
+                start: initialStart,
+                idempotency_key: 'uat03:' + Utilities.getUuid()
+              }, {source: 'PHASE6_UAT03'});
+              assert_(createResult && createResult.ok &&
+                (createResult.code === 'BOOKING_CREATED' ||
+                 createResult.code === 'BOOKING_CREATED_RECONCILIATION_PENDING'),
+                'UAT03_BOOKING_CREATE_FAILED', 'Controlled booking was not created.');
+
+              bookingId = String(createResult.booking_id || '');
+              eventId = String(createResult.event_id || '');
+              assert_(bookingId && eventId, 'UAT03_BOOKING_LINKS_MISSING',
+                'Booking ID or Google Event ID is missing.');
+
+              var managementUrl = String(createResult.management_url || '');
+              var managementToken = extractToken_(managementUrl);
+              assert_(managementToken, 'UAT03_MANAGEMENT_TOKEN_PARSE_FAILED',
+                'Could not resolve the one-time management token from the internal booking result.');
+
+              var bookingItem = findCurrentBookingByField_('Booking ID', bookingId, config);
+              assert_(bookingItem, 'UAT03_REGISTRY_ROW_MISSING',
+                'Booking Registry record was not found.');
+              assert_(String(bookingItem.record.Status || '') === 'Scheduled',
+                'UAT03_REGISTRY_STATUS_NOT_SCHEDULED', 'Booking Registry status is not Scheduled.');
+              assert_(String(bookingItem.record['Management Token Hash'] || '') &&
+                String(bookingItem.record['Management Token Hash'] || '') !== managementToken,
+                'UAT03_REGISTRY_TOKEN_NOT_HASHED', 'Booking Registry must contain only a token hash.');
+
+              var event = readBookingCalendarEvent_(config, eventId);
+              assert_(event, 'UAT03_CALENDAR_EVENT_MISSING', 'Created TEST Calendar event was not found.');
+              var description = String(event.description || '');
+              assert_(description.indexOf(managementToken) === -1 &&
+                description.indexOf(managementUrl) === -1 &&
+                description.indexOf('Manage appointment') === -1,
+                'UAT03_CALENDAR_DESCRIPTION_TOKEN_EXPOSURE',
+                'Calendar description contains management-token material.');
+              assert_(String(event.summary || '').indexOf('[TEST]') === 0,
+                'UAT03_CALENDAR_EVENT_NOT_TEST_LABELLED',
+                'Controlled Calendar event is not labelled TEST.');
+              var privateProps = event.extendedProperties && event.extendedProperties.private || {};
+              assert_(String(privateProps.managementTokenHash || '') &&
+                String(privateProps.managementTokenHash || '') !== managementToken,
+                'UAT03_CALENDAR_PRIVATE_TOKEN_NOT_HASHED',
+                'Calendar private metadata must contain only a management-token hash.');
+              if (typeof hashManagementToken_ === 'function') {
+                assert_(String(privateProps.managementTokenHash || '') === hashManagementToken_(managementToken),
+                  'UAT03_CALENDAR_HASH_MISMATCH',
+                  'Calendar private management-token hash does not match the issued token.');
+              }
+              if (config.createGoogleMeet) {
+                assert_(String(createResult.meet_link || ''), 'UAT03_MEET_LINK_MISSING',
+                  'Google Meet link was expected but not created.');
+              }
+
+              var calendarLog = findCalendarLogBooking_(bookingId);
+              assert_(calendarLog && String(calendarLog.record.Status || '') === 'Scheduled',
+                'UAT03_CALENDAR_LOG_NOT_SCHEDULED',
+                'Calendar Log did not record the scheduled booking.');
+
+              var managedBefore = getPublicManagedBooking({management_token: managementToken});
+              assert_(managedBefore && managedBefore.ok && managedBefore.code === 'BOOKING_FOUND' &&
+                managedBefore.active === true, 'UAT03_PUBLIC_MANAGEMENT_LOOKUP_FAILED',
+                'Public management lookup failed for the active booking.');
+              assert_(!publicHasInternalIds_(managedBefore), 'UAT03_PUBLIC_INTERNAL_ID_EXPOSURE',
+                'Public management response exposed internal lead/intake/event IDs.');
+
+              var availabilityAfterCreate = getBookingAvailability_();
+              var rescheduleStart = findSecondAvailableStart_(availabilityAfterCreate, initialStart);
+              assert_(rescheduleStart, 'UAT03_NO_RESCHEDULE_SLOT',
+                'No safe alternate TEST slot is available for rescheduling.');
+
+              var rescheduleResult = reschedulePublicConsultationBooking({
+                management_token: managementToken,
+                start: rescheduleStart
+              });
+              assert_(rescheduleResult && rescheduleResult.ok &&
+                rescheduleResult.code === 'BOOKING_RESCHEDULED',
+                'UAT03_RESCHEDULE_FAILED', 'Controlled booking reschedule failed.');
+
+              var eventAfterReschedule = readBookingCalendarEvent_(config, eventId);
+              assert_(eventAfterReschedule && bookingEventDate_(eventAfterReschedule.start) &&
+                bookingEventDate_(eventAfterReschedule.start).toISOString() ===
+                  new Date(rescheduleStart).toISOString(),
+                'UAT03_CALENDAR_RESCHEDULE_NOT_PROPAGATED',
+                'Rescheduled start time did not propagate to the TEST Calendar event.');
+              var logAfterReschedule = findCalendarLogBooking_(bookingId);
+              assert_(logAfterReschedule && String(logAfterReschedule.record.Status || '') === 'Rescheduled',
+                'UAT03_CALENDAR_LOG_NOT_RESCHEDULED',
+                'Calendar Log did not reflect the rescheduled status.');
+
+              var managedAfterReschedule = getPublicManagedBooking({management_token: managementToken});
+              assert_(managedAfterReschedule && managedAfterReschedule.ok &&
+                managedAfterReschedule.code === 'BOOKING_FOUND' &&
+                !publicHasInternalIds_(managedAfterReschedule),
+                'UAT03_PUBLIC_MANAGEMENT_AFTER_RESCHEDULE_FAILED',
+                'Public management response after reschedule is invalid.');
+
+              var cancelResult = cancelPublicConsultationBooking({
+                management_token: managementToken,
+                reason: 'Phase 6 UAT-03 controlled cancellation'
+              });
+              assert_(cancelResult && cancelResult.ok && cancelResult.code === 'BOOKING_CANCELLED',
+                'UAT03_CANCEL_FAILED', 'Controlled booking cancellation failed.');
+
+              var cancelledItem = findCurrentBookingByField_('Booking ID', bookingId, config);
+              assert_(cancelledItem && String(cancelledItem.record.Status || '') === 'Cancelled' &&
+                String(cancelledItem.record['Record Status'] || '') === 'INACTIVE' &&
+                String(cancelledItem.record['Management Token Hash'] || '') === '',
+                'UAT03_CANCEL_REGISTRY_NOT_REVOKED',
+                'Cancellation did not inactivate the registry row and revoke the token hash.');
+              assert_(!readBookingCalendarEvent_(config, eventId),
+                'UAT03_CANCEL_CALENDAR_EVENT_REMAINS',
+                'Cancelled TEST Calendar event still resolves as active.');
+              var logAfterCancel = findCalendarLogBooking_(bookingId);
+              assert_(logAfterCancel && String(logAfterCancel.record.Status || '') === 'Cancelled' &&
+                String(logAfterCancel.record['Record Status'] || '') === 'Archived',
+                'UAT03_CALENDAR_LOG_NOT_CANCELLED',
+                'Calendar Log did not reflect cancellation/archive state.');
+
+              var inactiveLookup = getPublicManagedBooking({management_token: managementToken});
+              assert_(inactiveLookup && inactiveLookup.ok === false &&
+                (inactiveLookup.code === 'BOOKING_NOT_FOUND' ||
+                 inactiveLookup.code === 'BOOKING_NOT_ACTIVE'),
+                'UAT03_INACTIVE_TOKEN_STILL_WORKS',
+                'Cancelled management token still resolves an active booking.');
+
+              var intakeRows = findRowsByHeaderValue_('Intake Submissions', 'Intake ID', intakeId);
+              var leadRows = findRowsByHeaderValue_('Lead Database', 'Lead ID', leadId);
+              assert_(intakeRows.length === 1 && leadRows.length === 1,
+                'UAT03_SOURCE_ROWS_MISSING', 'Controlled Intake or Lead row is missing.');
+              var intakeRecord = getObjectRow_('Intake Submissions', intakeRows[0]).record;
+              var leadRecord = getObjectRow_('Lead Database', leadRows[0]).record;
+              assert_(!String(intakeRecord['Booking ID'] || '') &&
+                !String(intakeRecord['Calendar Event ID'] || '') &&
+                !String(intakeRecord['Appointment Date'] || '') &&
+                !String(leadRecord['Booking ID'] || '') &&
+                !String(leadRecord['Calendar Event ID'] || '') &&
+                !String(leadRecord['Appointment Date'] || ''),
+                'UAT03_SOURCE_LINKS_NOT_CLEARED',
+                'Cancellation did not clear source appointment links.');
+
+              var reconciliation = reconcileBookingRecords_({requestId: 'uat03-reconcile-' + Utilities.getUuid()});
+              var reconciledItem = findCurrentBookingByField_('Booking ID', bookingId, config);
+              assert_(reconciliation && reconciliation.ok && reconciledItem &&
+                String(reconciledItem.record['Reconciliation Status'] || '') === 'OK' &&
+                String(reconciledItem.record['Management Token Hash'] || '') === '',
+                'UAT03_RECONCILIATION_FAILED',
+                'Post-cancellation reconciliation did not preserve the safe inactive state.');
+
+              completed = true;
+              props.setProperty('UAT03_MANUAL_COMPLETED', 'TRUE');
+              var result = {
+                ok: true,
+                code: 'UAT03_MANUAL_PASS',
+                bookingId: bookingId,
+                eventCreated: true,
+                calendarDescriptionSecure: true,
+                privateTokenHashOnly: true,
+                meetLinkCreated: config.createGoogleMeet ? true : null,
+                publicManagementNoInternalIds: true,
+                rescheduled: true,
+                cancelled: true,
+                tokenRevoked: true,
+                sourceLinksCleared: true,
+                reconciliationSafe: true
+              };
+              console.log(JSON.stringify(result));
+              return result;
+            } finally {
+              if (!completed) bestEffortCleanup_();
+              props.setProperties({
+                PUBLIC_PORTAL_ENABLED: 'FALSE',
+                ENABLE_BOOKING_WORKFLOW: 'FALSE',
+                ENABLE_CALENDAR_WRITES: 'FALSE'
+              }, false);
+              if (gate_('PUBLIC_PORTAL_ENABLED') || gate_('ENABLE_BOOKING_WORKFLOW') ||
+                  gate_('ENABLE_CALENDAR_WRITES')) {
+                throw avodahError_('UAT03_GATE_CLEANUP_FAILED',
+                  'UAT-03 could not restore all three booking/public gates to FALSE.');
+              }
+            }
+          }
+
+          /** TEST-only fail-closed reset for the three UAT-03 gates. */
+          function resetPhase6Uat03SafetyGates() {
+            if (getEnvironment_() !== 'TEST') {
+              throw avodahError_('UAT03_TEST_ONLY', 'Safety reset may run only in TEST.');
+            }
+            var ss = getHubSpreadsheet_();
+            if (ss.getId() !== '1f8rZ8hVxMnrrFwnfezMhG1CklxDizdtC2IRvEnbC13s') {
+              throw avodahError_('UAT03_SPREADSHEET_MISMATCH', 'Wrong TEST spreadsheet.');
+            }
+            PropertiesService.getScriptProperties().setProperties({
+              PUBLIC_PORTAL_ENABLED: 'FALSE',
+              ENABLE_BOOKING_WORKFLOW: 'FALSE',
+              ENABLE_CALENDAR_WRITES: 'FALSE'
+            }, false);
+            return {
+              ok: true,
+              code: 'UAT03_SAFETY_GATES_FALSE',
+              PUBLIC_PORTAL_ENABLED: false,
+              ENABLE_BOOKING_WORKFLOW: false,
+              ENABLE_CALENDAR_WRITES: false
+            };
+          }
+          GS
+
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+
+          cat > diagnostics/latest-test-uat03-manual-runner-install.txt <<EOF
+          TEST UAT-03 manual runner install
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner_file=UAT03Manual.gs
+          runner_function=runPhase6Uat03Manual
+          safety_reset_function=resetPhase6Uat03SafetyGates
+          live_source_push=success
+          deployment_changed=no
+          script_properties_changed=no
+          spreadsheet_changed=no
+          calendar_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized install result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-manual-runner-install.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 manual runner install" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 manual runner install" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
