@@ -1,0 +1,21 @@
+TEST UAT-02 Intake to Lead result
+commit=e7f34add9b557d57160dda7499eb27c29060d55d
+utc=2026-07-23T12:24:55Z
+preserve_live_source=success
+build_ephemeral_runner=success
+deploy_ephemeral_runner=success
+execute_uat02=failure
+cleanup_and_restore=failure
+temporary_apps_script_version=3
+intake_rows_created=unknown
+lead_rows_linked=unknown
+first_result=unknown
+replay_result=unknown
+normalized_email_ok=unknown
+normalized_phone_ok=unknown
+follow_up_status_ok=unknown
+public_portal_gate_cleanup=no
+live_source_restored=yes
+deployment_restored_at_2=yes
+production_touched=no
+raw_tokens_or_workflow_tokens_recorded=no
