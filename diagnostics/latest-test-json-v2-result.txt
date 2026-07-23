@@ -1,0 +1,12 @@
+TEST Apps Script v1.1.1 JSON V2 deployment result
+commit=163960513e29ba02c64d44f8c5edfdfe6df32142
+utc=2026-07-23T08:52:41Z
+install=success
+auth=success
+pull=failure
+harden=skipped
+verify=skipped
+push_source=skipped
+version=skipped
+redeploy=skipped
+apps_script_version=
