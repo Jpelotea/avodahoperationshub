@@ -1,4 +1,4 @@
-name: Diagnose TEST CLASPRC_B64 Authentication
+name: Diagnose TEST CLASPRC_JSON Authentication
 
 on:
   workflow_dispatch:
@@ -23,55 +23,46 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Diagnose base64 credential safely
-        id: diagnose
+      - name: Diagnose JSON credential safely
         shell: bash
         env:
-          CLASPRC_B64: ${{ secrets.CLASPRC_B64 }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
           set +e
           mkdir -p diagnostics "$HOME"
           REPORT="diagnostics/latest-test-b64-auth.txt"
           : > "$REPORT"
-          echo "TEST CLASPRC_B64 authentication diagnostic" >> "$REPORT"
+          echo "TEST CLASPRC_JSON authentication diagnostic" >> "$REPORT"
           echo "commit=${GITHUB_SHA}" >> "$REPORT"
           echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$REPORT"
 
-          if [ -n "${CLASPRC_B64:-}" ]; then
-            echo "CLASPRC_B64_present=yes" >> "$REPORT"
-            echo "CLASPRC_B64_length=${#CLASPRC_B64}" >> "$REPORT"
+          if [ -n "${CLASPRC_JSON:-}" ]; then
+            echo "CLASPRC_JSON_present=yes" >> "$REPORT"
+            echo "CLASPRC_JSON_length=${#CLASPRC_JSON}" >> "$REPORT"
           else
-            echo "CLASPRC_B64_present=no" >> "$REPORT"
+            echo "CLASPRC_JSON_present=no" >> "$REPORT"
             echo "diagnostic_complete=yes" >> "$REPORT"
             exit 0
           fi
 
-          export CLASPRC_B64
-          node <<'NODE' >/tmp/decode.log 2>&1
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+
+          node <<'NODE' >/tmp/jsoncheck.log 2>&1
           const fs = require('fs');
-          const raw = process.env.CLASPRC_B64 || '';
+          const text = fs.readFileSync(process.env.HOME + '/.clasprc.json', 'utf8');
+          console.log('starts_with_brace=' + (text.trimStart().startsWith('{') ? 'yes' : 'no'));
           try {
-            const decoded = Buffer.from(raw.replace(/\s+/g, ''), 'base64').toString('utf8');
-            fs.writeFileSync(process.env.HOME + '/.clasprc.json', decoded, 'utf8');
-            console.log('decode_ok=yes');
-            console.log('decoded_length=' + decoded.length);
-            console.log('starts_with_brace=' + (decoded.trimStart().startsWith('{') ? 'yes' : 'no'));
-            try {
-              const parsed = JSON.parse(decoded);
-              console.log('json_parse_ok=yes');
-              console.log('top_level_type=' + (Array.isArray(parsed) ? 'array' : typeof parsed));
-              console.log('top_level_key_count=' + (parsed && typeof parsed === 'object' ? Object.keys(parsed).length : 0));
-            } catch (e) {
-              console.log('json_parse_ok=no');
-              console.log('json_parse_error=' + String(e.message || e).replace(/[\r\n]+/g, ' '));
-            }
+            const parsed = JSON.parse(text);
+            console.log('json_parse_ok=yes');
+            console.log('top_level_type=' + (Array.isArray(parsed) ? 'array' : typeof parsed));
+            console.log('top_level_key_count=' + (parsed && typeof parsed === 'object' ? Object.keys(parsed).length : 0));
           } catch (e) {
-            console.log('decode_ok=no');
-            console.log('decode_error=' + String(e.message || e).replace(/[\r\n]+/g, ' '));
+            console.log('json_parse_ok=no');
+            console.log('json_parse_error=' + String(e.message || e).replace(/[\r\n]+/g, ' '));
           }
           NODE
-          cat /tmp/decode.log >> "$REPORT"
-          chmod 600 "$HOME/.clasprc.json" 2>/dev/null
+          cat /tmp/jsoncheck.log >> "$REPORT"
 
           npm install --global @google/clasp >/tmp/npm-install.log 2>&1
           echo "npm_install_clasp_exit=$?" >> "$REPORT"
@@ -125,9 +116,9 @@ jobs:
             "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-b64-auth.txt?ref=main" \
             | jq -r '.sha // empty' || true)"
           if [ -n "$CURRENT_SHA" ]; then
-            jq -n --arg message "Record TEST CLASPRC_B64 authentication diagnostic" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+            jq -n --arg message "Record TEST CLASPRC_JSON authentication diagnostic" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
           else
-            jq -n --arg message "Record TEST CLASPRC_B64 authentication diagnostic" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+            jq -n --arg message "Record TEST CLASPRC_JSON authentication diagnostic" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
           fi
           curl -fsSL -X PUT \
             -H "Authorization: Bearer $GH_TOKEN" \
