@@ -1,0 +1,246 @@
+TEST UAT-02 admin-route inspection
+commit=0dfc7ccb2ee2e6b7de84eae19d44ea4e369a6b69
+utc=2026-07-23T12:13:27Z
+setup_property_function_context:
+1:/** One-time, idempotent foundation setup and configuration verification. */
+2:
+3:function setInitialScriptProperties(values) {
+4:  requireSetupOperator_();
+5:  if (!values || Object.prototype.toString.call(values) !== '[object Object]') {
+6:    throw avodahError_('INVALID_PROPERTIES',
+7:      'Pass an object containing only real environment-specific property values.');
+8:  }
+9:  var allowed = AVODAH_CONFIG.REQUIRED_SCRIPT_PROPERTIES
+10:    .concat(AVODAH_CONFIG.OPTIONAL_SCRIPT_PROPERTIES);
+11:  var accepted = {};
+12:  Object.keys(values).forEach(function(key) {
+13:    if (allowed.indexOf(key) === -1) {
+14:      throw avodahError_('UNKNOWN_PROPERTY', 'Unsupported Script Property: ' + key);
+15:    }
+16:    var text = String(values[key] == null ? '' : values[key]).trim();
+17:    if (!text) return;
+18:    if (/example|replace[-_ ]?me|your[-_ ]/i.test(text)) {
+19:      throw avodahError_('SAMPLE_VALUE_REJECTED',
+20:        'Sample or placeholder values cannot be saved: ' + key);
+21:    }
+22:    accepted[key] = text;
+23:  });
+24:  if (accepted.ENVIRONMENT) {
+25:    accepted.ENVIRONMENT = accepted.ENVIRONMENT.toUpperCase();
+26:    if (AVODAH_CONFIG.ALLOWED_ENVIRONMENTS.indexOf(accepted.ENVIRONMENT) === -1) {
+27:      throw avodahError_('INVALID_ENVIRONMENT',
+28:        'ENVIRONMENT must be TEST, STAGING, or PRODUCTION.');
+29:    }
+30:  }
+31:  PropertiesService.getScriptProperties().setProperties(accepted, false);
+32:  return {
+33:    updated: Object.keys(accepted),
+34:    status: getScriptPropertyStatus_()
+35:  };
+36:}
+37:
+38:function masterSetup(options) {
+39:  requireSetupOperator_();
+40:  var config = options || {};
+41:  return withScriptLock_('masterSetup', function() {
+42:    var environment = getEnvironment_();
+43:    if (AVODAH_CONFIG.ALLOWED_ENVIRONMENTS.indexOf(environment) === -1) {
+44:      throw avodahError_('ENVIRONMENT_NOT_CONFIGURED',
+45:        'Set ENVIRONMENT to TEST, STAGING, or PRODUCTION before masterSetup().');
+46:    }
+47:    if (environment === 'PRODUCTION' && config.confirmProduction !== true) {
+48:      throw avodahError_('PRODUCTION_CONFIRMATION_REQUIRED',
+49:        'Run and verify setup in TEST first. Production requires ' +
+50:        'masterSetup({confirmProduction:true}).');
+51:    }
+52:
+53:    var spreadsheet = getHubSpreadsheet_();
+54:    var report = {
+55:      version: AVODAH_CONFIG.VERSION,
+56:      environment: environment,
+57:      spreadsheetId: spreadsheet.getId(),
+58:      spreadsheetName: spreadsheet.getName(),
+59:      spreadsheetTimeZone: spreadsheet.getSpreadsheetTimeZone(),
+60:      createdSheets: [],
+dopost_context:
+1:function getConfiguredTestSpreadsheetId_() {
+2:  const properties = PropertiesService.getScriptProperties();
+3:  const environment = String(properties.getProperty("ENVIRONMENT") || "").trim().toUpperCase();
+4:  const spreadsheetId = String(properties.getProperty("AVODAH_SPREADSHEET_ID") || "").trim();
+5:
+6:  if (environment !== "TEST") {
+7:    throw new Error("This package is TEST-only. Set ENVIRONMENT=TEST before running any function.");
+8:  }
+9:  if (!spreadsheetId) {
+10:    throw new Error("AVODAH_SPREADSHEET_ID is required in Script Properties.");
+11:  }
+12:
+13:  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+14:  if (!/^TEST(?:\s|-)/i.test(spreadsheet.getName())) {
+15:    throw new Error("TEST safety check failed: the configured spreadsheet name must begin with TEST.");
+16:  }
+17:  return spreadsheetId;
+18:}
+19:
+20:// Fail closed before any legacy V3 entry point can open a spreadsheet.
+21:const SPREADSHEET_ID = getConfiguredTestSpreadsheetId_();
+22:const LEADS_SHEET_NAME = "Intake Submissions";
+23:const CALENDAR_LOG_SHEET_NAME = "Calendar Log";
+24:const SETTINGS_SHEET_NAME = "Targets & Settings";
+25:const BOOKING_SETTINGS_RANGE = "U3:V14";
+26:const SCHEDULE_IMPORT_SHEET_NAME = "Schedule Import";
+27:const SCHEDULE_PREVIEW_SHEET_NAME = "Schedule Import Preview";
+28:const CHRISTINE_CALENDAR_SHEET_NAME = "Ma'am Christine Calendar";
+29:const PRODUCTION_VERSION = "2026-07-23-test-portal-v1.1.0";
+30:const DEFAULT_TIMEZONE = "Asia/Manila";
+31:const BOOKING_AUDIT_SHEET_NAME = "Booking Audit";
+32:const BOOKING_BLACKOUTS_SHEET_NAME = "Booking Blackouts";
+33:const BOOKING_REGISTRY_SHEET_NAME = "Booking Registry";
+34:const BOOKING_RECONCILIATION_SHEET_NAME = "Booking Reconciliation";
+35:const BOOKING_MANAGEMENT_DEFAULT_URL = "";
+36:const BOOKING_ADMIN_DEFAULT_EMAIL = "";
+37:const ACTIVE_BOOKING_STATUSES = new Set(["Scheduled", "Confirmed", "Rescheduled"]);
+38:const BOOKING_SETTINGS_RANGE_V2 = "U3:V20";
+39:
+40:function doPost(e) {
+41:  const requestId = Utilities.getUuid();
+42:  let lock = null;
+43:
+44:  try {
+45:    const contentType = String((e && e.postData && e.postData.type) || "").toLowerCase();
+46:    if (contentType && !contentType.includes("application/json")) {
+47:      return apiJsonResponse_({
+48:        ok: false,
+49:        code: "UNSUPPORTED_CONTENT_TYPE",
+50:        message: "Content-Type must be application/json.",
+51:        http_status: 415,
+52:        retryable: false
+53:      }, requestId);
+54:    }
+55:
+56:    let payload;
+57:    try {
+58:      payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+59:    } catch (parseError) {
+60:      return apiJsonResponse_({
+61:        ok: false,
+62:        code: "INVALID_JSON",
+63:        message: "The request body is not valid JSON.",
+64:        http_status: 400,
+65:        retryable: false
+66:      }, requestId);
+67:    }
+68:
+69:    if (!isAuthorizedWebhook[REDACTED] {
+70:      return apiJsonResponse_({
+71:        ok: false,
+72:        code: "UNAUTHORIZED",
+73:        message: "Unauthorized request.",
+74:        http_status: 401,
+75:        retryable: false
+76:      }, requestId);
+77:    }
+78:
+79:    if (payload.action === "availability") {
+80:      return apiJsonResponse_(typeof getBookingAvailability_ === "function"
+81:        ? getBookingAvailability_() : getAvailability_(), requestId);
+82:    }
+83:
+84:    if (payload.action === "booking_status") {
+85:      return apiJsonResponse_(getManagedBookingStatus_(payload, requestId), requestId);
+86:    }
+87:
+88:    const lockActions = new Set(["book", "submit", "reschedule", "cancel", "reconcile"]);
+89:    if (lockActions.has(payload.action) || Array.isArray(payload.row)) {
+90:      lock = acquireScriptLock_();
+91:      if (!lock) {
+92:        return apiJsonResponse_({
+93:          ok: false,
+94:          code: "SYSTEM_BUSY",
+95:          message: "The booking service is busy. Please retry shortly.",
+96:          http_status: 503,
+97:          retryable: true
+98:        }, requestId);
+99:      }
+100:    }
+101:
+102:    if (payload.action === "book") {
+103:      return apiJsonResponse_(typeof createConsultationBooking_ === "function"
+104:        ? createConsultationBooking_(payload, {requestId: requestId, lockHeld: true, source: "PUBLIC_WEBHOOK"})
+105:        : bookConsultation_(payload, requestId), requestId);
+106:    }
+107:
+108:    if (payload.action === "reschedule") {
+109:      return apiJsonResponse_(typeof rescheduleConsultationBooking_ === "function"
+110:        ? rescheduleConsultationBooking_(payload, {requestId: requestId, lockHeld: true, source: "PUBLIC_WEBHOOK"})
+111:        : rescheduleManagedBooking_(payload, requestId), requestId);
+112:    }
+113:
+114:    if (payload.action === "cancel") {
+115:      return apiJsonResponse_(typeof cancelConsultationBooking_ === "function"
+116:        ? cancelConsultationBooking_(payload, {requestId: requestId, lockHeld: true, source: "PUBLIC_WEBHOOK"})
+117:        : cancelManagedBooking_(payload, requestId), requestId);
+118:    }
+119:
+120:    if (payload.action === "reconcile") {
+121:      return apiJsonResponse_(typeof reconcileBookingRecords_ === "function"
+122:        ? reconcileBookingRecords_({requestId: requestId, lockHeld: true, source: "PUBLIC_WEBHOOK"})
+123:        : reconcileBookingData_(requestId), requestId);
+124:    }
+125:
+126:    // Explicit submit action is preferred, while legacy row-only payloads remain
+127:    // supported so already-deployed clients continue to work.
+128:    if (payload.action === "submit" || Array.isArray(payload.row)) {
+129:      return apiJsonResponse_(appendLead_(payload.row), requestId);
+130:    }
+131:
+132:    return apiJsonResponse_({
+133:      ok: false,
+134:      code: "INVALID_ACTION",
+135:      message: "Unsupported action.",
+136:      http_status: 400,
+137:      retryable: false
+138:    }, requestId);
+139:  } catch (error) {
+140:    console.error(error && error.stack ? error.stack : error);
+141:    return apiJsonResponse_({
+142:      ok: false,
+143:      code: "INTERNAL_ERROR",
+144:      message: "Unable to process request.",
+145:      http_status: 500,
+146:      retryable: true
+147:    }, requestId);
+148:  } finally {
+149:    if (lock && lock.hasLock()) lock.releaseLock();
+150:  }
+151:}
+152:
+153:function doGet(e) {
+154:  const view = String(e && e.parameter && e.parameter.view || "")
+155:    .trim().toLowerCase();
+156:  if (view === "portal" && typeof foundationPublicDoGet_ === "function") {
+157:    return foundationPublicDoGet_();
+158:  }
+159:  if (view === "hub" && typeof foundationDoGet_ === "function") {
+160:    return foundationDoGet_();
+161:  }
+162:  return jsonResponse_({
+163:    ok: true,
+164:    service: "Avodah Operations Hub",
+165:    version: PRODUCTION_VERSION,
+166:    timezone: DEFAULT_TIMEZONE,
+167:    server_iso_now: new Date().toISOString()
+168:  });
+169:}
+170:
+171:function appendLead_(row) {
+172:  if (!Array.isArray(row) || row.length !== 24) {
+173:    return { ok: false, code: "INVALID_ROW", error: "Invalid row" };
+174:  }
+175:
+176:  const leadId = String(row[0] || "").trim();
+177:  if (!isUuidV4_(leadId)) {
+178:    return { ok: false, code: "INVALID_LEAD_ID", error: "Submission ID must be a UUID v4" };
+179:  }
+180:
+write_operations_performed=no
