@@ -1,0 +1,17 @@
+TEST CLASPRC_B64 authentication diagnostic
+commit=ea1a50e5967a9158976ba663d93234df1327ed3f
+utc=2026-07-23T08:14:41Z
+CLASPRC_B64_present=yes
+CLASPRC_B64_length=940
+decode_ok=yes
+decoded_length=579
+starts_with_brace=no
+json_parse_ok=no
+json_parse_error=Unexpected token '�', "��h�棢�niƫ�"... is not valid JSON
+npm_install_clasp_exit=0
+clasp_version_exit=0
+clasp_version=3.3.0 
+clasp_pull_exit=1
+clasp_pull_error:
+Unexpected [REDACTED] '�', "��h�棢�niƫ�"... is not valid JSON
+diagnostic_complete=yes
