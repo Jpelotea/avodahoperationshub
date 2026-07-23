@@ -33,12 +33,21 @@ jobs:
       - name: Configure clasp authentication
         shell: bash
         env:
+          CLASPRC_B64: ${{ secrets.CLASPRC_B64 }}
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
-          test -n "$CLASPRC_JSON"
+          set -euo pipefail
           mkdir -p "$HOME"
-          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
-          test -s "$HOME/.clasprc.json"
+          if [ -n "${CLASPRC_B64:-}" ]; then
+            printf '%s' "$CLASPRC_B64" | base64 --decode > "$HOME/.clasprc.json"
+          elif [ -n "${CLASPRC_JSON:-}" ]; then
+            printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          else
+            echo "Missing CLASPRC_B64 or CLASPRC_JSON GitHub secret." >&2
+            exit 1
+          fi
+          chmod 600 "$HOME/.clasprc.json"
+          node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8")); console.log("clasp credential JSON validated")'
           cat > .clasp.json <<'JSON'
           {
             "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
