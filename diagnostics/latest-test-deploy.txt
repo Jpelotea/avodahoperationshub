@@ -1,0 +1,12 @@
+TEST Apps Script deployment diagnostic
+commit=90cc75cd419ee47918baf5bf174189deec099dc4
+utc=2026-07-23T06:03:39Z
+CLASPRC_JSON_present=yes
+CLASPRC_JSON_valid_json=no
+npm_install_clasp_exit=0
+clasp_version_exit=0
+clasp_version=3.3.0 
+clasp_pull_exit=1
+clasp_pull_error:
+Expected ',' or '}' after property value in JSON at position 630
+diagnostic_complete=yes
