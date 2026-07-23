@@ -1,0 +1,77 @@
+name: Inspect TEST UAT-02 Admin Route
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat02-admin-route.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull TEST source and inspect admin route
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          REPORT="diagnostics/latest-test-uat02-admin-route.txt"
+          {
+            echo "TEST UAT-02 admin-route inspection"
+            echo "commit=${GITHUB_SHA}"
+            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "setup_property_function_context:"
+            awk 'NR>=1 && NR<=60 {print NR ":" $0}' src/Setup.gs \
+              | sed -E 's/(WEBHOOK_SECRET|TOKEN|SECRET|PASSWORD)[^[:space:]]*/[REDACTED]/Ig'
+            echo "dopost_context:"
+            awk 'NR>=1 && NR<=180 {print NR ":" $0}' src/Code.gs \
+              | sed -E 's/(WEBHOOK_SECRET|TOKEN|SECRET|PASSWORD)[^[:space:]]*/[REDACTED]/Ig'
+            echo "write_operations_performed=no"
+          } > "$REPORT"
+
+      - name: Publish sanitized inspection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat02-admin-route.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-02 admin-route inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-02 admin-route inspection" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
