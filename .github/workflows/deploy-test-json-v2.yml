@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: deploy-test-apps-script
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -59,25 +63,24 @@ jobs:
           clasp pull
           test -f src/appsscript.json
           test -f src/Calendar.gs
-          test -f src/LegacyV3.gs
           test -f src/WebApp.gs
           test -f src/Bookings.gs
           test -f src/FoundationTests.gs
 
-      - name: Apply v1.1.1 security hardening
+      - name: Apply modular v1.1.1 security hardening
         id: harden
-        run: node scripts/harden-v1.1.1.js
+        run: node scripts/harden-v1.1.1-modular.js
 
-      - name: Verify hardened source
+      - name: Verify modular hardened source
         id: verify
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -R -n "Manage appointment:.*managementUrl" src/Calendar.gs src/LegacyV3.gs
-          ! grep -R -n "details.managementUrl" src/Calendar.gs src/LegacyV3.gs
+          ! grep -R -n "Manage appointment:.*managementUrl" src/Calendar.gs
+          ! grep -R -n "details.managementUrl" src/Calendar.gs
           grep -q "Management Token Hash.*''" src/Bookings.gs
           grep -q "publicManagedBookingResult_" src/WebApp.gs
-          node --check scripts/harden-v1.1.1.js
+          node --check scripts/harden-v1.1.1-modular.js
           for f in src/*.gs; do node --check < "$f"; done
 
       - name: Push hardened TEST source
@@ -89,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          OUTPUT="$(clasp version 'TEST v1.1.1 - management-token Calendar exposure hardened')"
+          OUTPUT="$(clasp version 'TEST v1.1.1 - modular management-token Calendar exposure hardened')"
           echo "$OUTPUT"
           VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
           test -n "$VERSION"
@@ -103,7 +106,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.number }}
         run: |
           set -euo pipefail
-          clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - management-token Calendar exposure hardened; all write gates disabled"
+          clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - modular management-token Calendar exposure hardened; all write gates disabled"
           clasp deployments
 
       - name: Record sanitized V2 deployment result
