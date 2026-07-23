@@ -1,17 +1,15 @@
-TEST CLASPRC_B64 authentication diagnostic
-commit=11b0bc14689a0d2cc2d9d93cf45b994c3c445ab8
-utc=2026-07-23T08:24:11Z
-CLASPRC_B64_present=yes
-CLASPRC_B64_length=909
-decode_ok=yes
-decoded_length=663
-starts_with_brace=no
-json_parse_ok=no
-json_parse_error=Unexpected token 'z', "z���X�=�a�"... is not valid JSON
+TEST CLASPRC_JSON authentication diagnostic
+commit=d4990a694a70b10ee69854e00546ba2f48f200c4
+utc=2026-07-23T08:27:59Z
+CLASPRC_JSON_present=yes
+CLASPRC_JSON_length=573
+starts_with_brace=yes
+json_parse_ok=yes
+top_level_type=object
+top_level_key_count=1
 npm_install_clasp_exit=0
 clasp_version_exit=0
 clasp_version=3.3.0 
-clasp_pull_exit=1
-clasp_pull_error:
-Unexpected [REDACTED] 'z', "z���X�=�a�"... is not valid JSON
+clasp_pull_exit=0
+pulled_appsscript_json=yes
 diagnostic_complete=yes
