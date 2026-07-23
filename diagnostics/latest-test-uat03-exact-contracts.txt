@@ -1,0 +1,698 @@
+TEST UAT-03 exact contract inspection
+write_operations_performed=no
+production_touched=no
+
+## Bookings.gs :: publicManagedBookingResult_
+function publicManagedBookingResult_(item, config) {
+  var record = item.record;
+  var status = String(record.Status || '');
+  if (!AVODAH_ACTIVE_BOOKING_STATUSES[status]) {
+    return {ok: false, code: 'BOOKING_NOT_ACTIVE',
+      message: 'This appointment management link is no longer available.',
+      http_status: 410, retryable: false};
+  }
+  return {
+    ok: true,
+    code: 'BOOKING_FOUND',
+    http_status: 200,
+    retryable: false,
+    booking_id: String(record['Booking ID'] || ''),
+    status: status,
+    active: true,
+    start: record.Start instanceof Date ? record.Start.toISOString() : '',
+    end: record.End instanceof Date ? record.End.toISOString() : '',
+    meet_link: String(record['Meet Link'] || ''),
+    timezone: String((config || {}).timezone || AVODAH_CONFIG.TIME_ZONE)
+  };
+}
+
+## Bookings.gs :: bookingManagementParts_
+function bookingManagementParts_() {
+  var token = typeof generateManagementToken_ === 'function'
+    ? generateManagementToken_() : Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '');
+  var hash = typeof hashManagementToken_ === 'function'
+    ? hashManagementToken_(token) : token;
+  var url = typeof buildManagementUrl_ === 'function' ? buildManagementUrl_(token) : '';
+  return {token: token, hash: hash, url: url};
+}
+
+## Bookings.gs :: createConsultationBookingCore_
+function createConsultationBookingCore_(payload, options) {
+  assertBookingWritesEnabled_();
+  var requestId = String(options.requestId || Utilities.getUuid());
+  var config = getBookingRuntimeConfig_();
+  var identity = resolveBookingIdentity_(payload);
+  if (!identity.ok) return Object.assign(identity, {http_status: 404, retryable: false});
+  var start = new Date(payload.start);
+  var validation = validateBookingSlotRules_(start, config, new Date());
+  if (!validation.ok) return Object.assign(validation, {http_status: 400, retryable: false});
+  var end = new Date(start.getTime() + config.durationMinutes * 60 * 1000);
+  var leadId = String(identity.lead.record['Lead ID'] || '');
+  var intakeId = identity.intake ? String(identity.intake.record['Intake ID'] || '') : '';
+  var fingerprint = bookingFingerprintV4_(leadId, start);
+  var explicitKey = String(payload.idempotency_key || payload.idempotencyKey || '').trim().substring(0, 200);
+  var idempotencyKey = explicitKey || ('booking:' + fingerprint);
+  var replay = findCurrentBookingByField_('Idempotency Key', idempotencyKey, config);
+  if (replay) return bookingResultFromObject_(replay, 'IDEMPOTENT_REPLAY');
+  var active = findActiveBookingForLead_(leadId, config);
+  if (active) return bookingResultFromObject_(active, 'ALREADY_BOOKED');
+
+  var conflictStart = new Date(start.getTime() - config.bufferBeforeMinutes * 60 * 1000);
+  var conflictEnd = new Date(end.getTime() + config.bufferAfterMinutes * 60 * 1000);
+  if (bookingCalendarConflictExists_(config, conflictStart, conflictEnd, '')) {
+    return {ok: false, code: 'SLOT_UNAVAILABLE', message: 'The selected slot is no longer available.', http_status: 409, retryable: false};
+  }
+  if (isBlockedByBlackout_(start, end, getBookingBlackouts_(config, conflictStart, conflictEnd))) {
+    return {ok: false, code: 'SLOT_UNAVAILABLE', message: 'The selected slot is unavailable.', http_status: 409, retryable: false};
+  }
+
+  var bookingId = generateUniqueId_('BOOKING');
+  var management = bookingManagementParts_();
+  var details = {
+    bookingId: bookingId,
+    leadId: leadId,
+    intakeId: intakeId,
+    clientName: String(identity.lead.record['Full Name'] || 'Client'),
+    clientEmail: String(identity.lead.record['Email Address'] || ''),
+    clientPhone: String(identity.lead.record['Mobile Number'] || ''),
+    start: start,
+    end: end,
+    idempotencyKey: idempotencyKey,
+    fingerprint: fingerprint,
+    managementTokenHash: management.hash
+  };
+  var event;
+  try {
+    event = createBookingCalendarEvent_(config, details);
+    details.eventId = String(event.id || '');
+    details.meetLink = bookingEventMeetLink_(event);
+  } catch (error) {
+    auditBookingAction_({requestId: requestId, bookingId: bookingId, leadId: leadId,
+      action: 'BOOKING_CALENDAR_CREATE', result: 'FAILED', details: {error: String(error)}});
+    return {ok: false, code: 'CALENDAR_CREATE_FAILED', message: 'The calendar event could not be created.', http_status: 502, retryable: true};
+  }
+
+  var registryRow;
+  try {
+    registryRow = appendBookingDatabaseRecord_(details, config);
+  } catch (registryError) {
+    var registryRollback = deleteBookingCalendarEvent_(config, details.eventId);
+    recordBookingIssue_({bookingId: bookingId, leadId: leadId,
+      code: 'BOOKING_DATABASE_WRITE_FAILED', details: String(registryError),
+      repairAction: registryRollback.ok ? 'Calendar event rolled back' : 'Manual Calendar cleanup required',
+      result: registryRollback.ok ? 'ROLLED_BACK' : 'PENDING'});
+    return {ok: false, code: registryRollback.ok ? 'BOOKING_DATABASE_WRITE_FAILED' : 'CALENDAR_ROLLBACK_FAILED',
+      message: 'The booking could not be saved.', http_status: 500, retryable: registryRollback.ok};
+  }
+
+  try {
+    appendCalendarLogBooking_(details, config, 'Scheduled');
+  } catch (logError) {
+    var logRollback = deleteBookingCalendarEvent_(config, details.eventId);
+    updateObjectRow_('Booking Database', registryRow, {
+      'Status': 'Failed', 'Record Status': 'ERROR', 'Updated At': new Date(),
+      'Reconciliation Status': logRollback.ok ? 'ROLLED_BACK' : 'PENDING',
+      'Last Error': String(logError)
+    });
+    recordBookingIssue_({bookingId: bookingId, leadId: leadId,
+      code: 'CALENDAR_LOG_WRITE_FAILED', details: String(logError),
+      repairAction: logRollback.ok ? 'Calendar event rolled back' : 'Manual reconciliation required',
+      result: logRollback.ok ? 'ROLLED_BACK' : 'PENDING'});
+    return {ok: false, code: logRollback.ok ? 'CALENDAR_LOG_WRITE_FAILED' : 'CALENDAR_ROLLBACK_FAILED',
+      message: 'The booking could not be logged.', http_status: 500, retryable: logRollback.ok};
+  }
+
+  var reconciliationPending = false;
+  try {
+    updateBookingSourceLinks_(identity, details, config);
+  } catch (linkError) {
+    reconciliationPending = true;
+    recordBookingIssue_({bookingId: bookingId, leadId: leadId,
+      code: 'SOURCE_LINK_UPDATE_FAILED', details: String(linkError),
+      repairAction: 'Run canonical booking reconciliation', result: 'PENDING'});
+  }
+  updateObjectRow_('Booking Database', registryRow, {
+    'Updated At': new Date(),
+    'Reconciliation Status': reconciliationPending ? 'PENDING' : 'OK',
+    'Last Error': reconciliationPending ? 'Intake or Lead link update is pending.' : ''
+  });
+  auditBookingAction_({requestId: requestId, bookingId: bookingId, leadId: leadId,
+    action: 'BOOKING_CREATED', result: reconciliationPending ? 'RECONCILIATION_PENDING' : 'SUCCESS',
+    details: {intakeId: intakeId, eventId: details.eventId}});
+
+  return {
+    ok: true,
+    code: reconciliationPending ? 'BOOKING_CREATED_RECONCILIATION_PENDING' : 'BOOKING_CREATED',
+    http_status: 200,
+    retryable: false,
+    booking_id: bookingId,
+    lead_id: leadId,
+    intake_id: intakeId,
+    idempotency_key: idempotencyKey,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    meet_link: details.meetLink,
+    event_id: details.eventId,
+    management_url: management.url,
+    reconciliation_required: reconciliationPending
+  };
+}
+
+## Bookings.gs :: rescheduleConsultationBooking_
+function rescheduleConsultationBooking_(payload, options) {
+  var context = options || {};
+  if (!context.lockHeld) {
+    return withScriptLock_('reschedule consultation booking', function() {
+      return rescheduleConsultationBooking_(payload, Object.assign({}, context, {lockHeld: true}));
+    }, 30000);
+  }
+  assertBookingWritesEnabled_();
+  var requestId = String(context.requestId || Utilities.getUuid());
+  var config = getBookingRuntimeConfig_();
+  var item = resolveManagedBookingV4_(payload || {}, config);
+  if (!item) return {ok: false, code: 'BOOKING_NOT_FOUND', message: 'The booking was not found in the active TEST calendar binding.', http_status: 404, retryable: false};
+  if (!AVODAH_ACTIVE_BOOKING_STATUSES[String(item.record.Status || '')]) {
+    return {ok: false, code: 'BOOKING_NOT_ACTIVE', message: 'The booking is not active.', http_status: 409, retryable: false};
+  }
+  var start = new Date(payload.start);
+  var validation = validateBookingSlotRules_(start, config, new Date());
+  if (!validation.ok) return Object.assign(validation, {http_status: 400, retryable: false});
+  var end = new Date(start.getTime() + config.durationMinutes * 60 * 1000);
+  var eventId = String(item.record['Google Event ID'] || '');
+  var conflictStart = new Date(start.getTime() - config.bufferBeforeMinutes * 60 * 1000);
+  var conflictEnd = new Date(end.getTime() + config.bufferAfterMinutes * 60 * 1000);
+  if (bookingCalendarConflictExists_(config, conflictStart, conflictEnd, eventId) ||
+      isBlockedByBlackout_(start, end, getBookingBlackouts_(config, conflictStart, conflictEnd))) {
+    return {ok: false, code: 'SLOT_UNAVAILABLE', message: 'The selected slot is unavailable.', http_status: 409, retryable: false};
+  }
+  if (!readBookingCalendarEvent_(config, eventId)) {
+    updateObjectRow_('Booking Database', item.rowNumber, {
+      'Last Reconciled': new Date(), 'Reconciliation Status': 'EVENT_MISSING',
+      'Last Error': 'Calendar event not found.'
+    });
+    return {ok: false, code: 'RECONCILIATION_REQUIRED', message: 'The calendar event is missing.', http_status: 409, retryable: false};
+  }
+  var previous = item.record.Start instanceof Date ? item.record.Start.toISOString() : '';
+  var event = updateBookingCalendarEventTime_(config, eventId, start, end);
+  var meetLink = bookingEventMeetLink_(event) || String(item.record['Meet Link'] || '');
+  updateObjectRow_('Booking Database', item.rowNumber, {
+    'Status': 'Rescheduled', 'Start': start, 'End': end, 'Meet Link': meetLink,
+    'Updated At': new Date(), 'Last Reconciled': new Date(),
+    'Reconciliation Status': 'OK', 'Last Error': ''
+  });
+  var details = {
+    bookingId: String(item.record['Booking ID'] || ''),
+    leadId: String(item.record['Lead ID'] || ''),
+    intakeId: String(item.record['Intake ID'] || ''),
+    clientName: String(item.record['Client Name'] || 'Client'),
+    start: start, end: end, meetLink: meetLink, eventId: eventId,
+    idempotencyKey: String(item.record['Idempotency Key'] || ''),
+    fingerprint: String(item.record.Fingerprint || '')
+  };
+  var log = findCalendarLogBooking_(details.bookingId);
+  if (log) updateCalendarLogBooking_(log, details, config, 'Rescheduled');
+  else appendCalendarLogBooking_(details, config, 'Rescheduled');
+  var identity = resolveBookingIdentity_({lead_id: details.leadId, intake_id: details.intakeId});
+  if (identity.ok) updateBookingSourceLinks_(identity, details, config);
+  auditBookingAction_({requestId: requestId, bookingId: details.bookingId, leadId: details.leadId,
+    action: 'BOOKING_RESCHEDULED', previousValue: previous, newValue: start.toISOString(), result: 'SUCCESS'});
+  return {ok: true, code: 'BOOKING_RESCHEDULED', http_status: 200, retryable: false,
+    booking_id: details.bookingId, start: start.toISOString(), end: end.toISOString(), meet_link: meetLink};
+}
+
+## Bookings.gs :: cancelConsultationBooking_
+function cancelConsultationBooking_(payload, options) {
+  var context = options || {};
+  if (!context.lockHeld) {
+    return withScriptLock_('cancel consultation booking', function() {
+      return cancelConsultationBooking_(payload, Object.assign({}, context, {lockHeld: true}));
+    }, 30000);
+  }
+  assertBookingWritesEnabled_();
+  var requestId = String(context.requestId || Utilities.getUuid());
+  var config = getBookingRuntimeConfig_();
+  var item = resolveManagedBookingV4_(payload || {}, config);
+  if (!item) return {ok: false, code: 'BOOKING_NOT_FOUND', message: 'The booking was not found in the active TEST calendar binding.', http_status: 404, retryable: false};
+  var bookingId = String(item.record['Booking ID'] || '');
+  var leadId = String(item.record['Lead ID'] || '');
+  if (!AVODAH_ACTIVE_BOOKING_STATUSES[String(item.record.Status || '')]) {
+    return {ok: true, code: 'BOOKING_ALREADY_INACTIVE', booking_id: bookingId,
+      status: String(item.record.Status || ''), http_status: 200, retryable: false};
+  }
+  var deletion = deleteBookingCalendarEvent_(config, String(item.record['Google Event ID'] || ''));
+  if (!deletion.ok) {
+    return {ok: false, code: 'CALENDAR_CANCEL_FAILED', message: 'The calendar event could not be cancelled.', http_status: 502, retryable: true};
+  }
+  var reason = String(payload.reason || payload.cancellation_reason || '').trim().substring(0, 500);
+  updateObjectRow_('Booking Database', item.rowNumber, {
+    'Status': 'Cancelled', 'Cancellation Reason': reason, 'Updated At': new Date(),
+    'Last Reconciled': new Date(), 'Reconciliation Status': 'OK', 'Last Error': '',
+    'Record Status': 'INACTIVE', 'Management Token Hash': ''
+  });
+  var log = findCalendarLogBooking_(bookingId);
+  if (log) {
+    updateObjectRow_('Calendar Log', log.rowNumber, {
+      'Status': 'Cancelled', 'Sync Status': 'Synced', 'Last Synced': new Date(),
+      'Sync Error': '', 'Record Status': 'Archived', 'Updated At': new Date()
+    });
+  }
+  clearBookingSourceAppointment_(item.record);
+  auditBookingAction_({requestId: requestId, bookingId: bookingId, leadId: leadId,
+    action: 'BOOKING_CANCELLED', result: 'SUCCESS', details: {reason: reason}});
+  return {ok: true, code: 'BOOKING_CANCELLED', booking_id: bookingId,
+    status: 'Cancelled', http_status: 200, retryable: false};
+}
+
+## Bookings.gs :: reconcileBookingRecords_
+function reconcileBookingRecords_(options) {
+  var context = options || {};
+  if (!context.lockHeld) {
+    return withScriptLock_('reconcile canonical bookings', function() {
+      return reconcileBookingRecords_(Object.assign({}, context, {lockHeld: true}));
+    }, 30000);
+  }
+  var enabled = String(PropertiesService.getScriptProperties()
+    .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+  if (enabled !== 'TRUE') {
+    return {status: 'BOOKING_WORKFLOW_DISABLED', recordsRead: 0, recordsWritten: 0};
+  }
+  var requestId = String(context.requestId || ('reconcile-' + Utilities.getUuid()));
+  var config = getBookingRuntimeConfig_();
+  var rows = getObjectRows_('Booking Database');
+  var scoped = rows.filter(function(item) {
+    return String(item.record['Calendar Binding'] || '') === config.calendarBinding &&
+      String(item.record.Environment || '').toUpperCase() === config.environment;
+  });
+  var skippedLegacy = rows.length - scoped.length;
+  var synchronized = 0;
+  var repairedLog = 0;
+  var repairedLinks = 0;
+  var issues = 0;
+
+  scoped.forEach(function(item) {
+    var record = item.record;
+    var bookingId = String(record['Booking ID'] || '');
+    var leadId = String(record['Lead ID'] || '');
+    var event;
+    try {
+      event = readBookingCalendarEvent_(config, String(record['Google Event ID'] || ''));
+    } catch (error) {
+      issues += 1;
+      updateObjectRow_('Booking Database', item.rowNumber, {
+        'Last Reconciled': new Date(), 'Reconciliation Status': 'ERROR',
+        'Last Error': String(error)
+      });
+      recordBookingIssue_({bookingId: bookingId, leadId: leadId,
+        code: 'CALENDAR_READ_FAILED', details: String(error),
+        repairAction: 'Review Calendar access and rerun reconciliation', result: 'PENDING'});
+      return;
+    }
+    var active = Boolean(AVODAH_ACTIVE_BOOKING_STATUSES[String(record.Status || '')]);
+    if (!event) {
+      if (active) {
+        issues += 1;
+        updateObjectRow_('Booking Database', item.rowNumber, {
+          'Last Reconciled': new Date(), 'Reconciliation Status': 'EVENT_MISSING',
+          'Last Error': 'Calendar event not found.'
+        });
+        recordBookingIssue_({bookingId: bookingId, leadId: leadId,
+          code: 'EVENT_MISSING', details: 'Active bound booking has no Calendar event.',
+          repairAction: 'Administrative review required', result: 'PENDING'});
+      } else {
+        updateObjectRow_('Booking Database', item.rowNumber, {
+          'Last Reconciled': new Date(), 'Reconciliation Status': 'OK', 'Last Error': ''
+        });
+      }
+      return;
+    }
+    var eventStart = bookingEventDate_(event.start);
+    var eventEnd = bookingEventDate_(event.end);
+    var eventStatus = event.status === 'cancelled' ? 'Cancelled' : String(record.Status || 'Scheduled');
+    var details = {
+      bookingId: bookingId,
+      leadId: leadId,
+      intakeId: String(record['Intake ID'] || ''),
+      clientName: String(record['Client Name'] || 'Client'),
+      start: eventStart || record.Start,
+      end: eventEnd || record.End,
+      meetLink: bookingEventMeetLink_(event) || String(record['Meet Link'] || ''),
+      eventId: String(event.id || record['Google Event ID'] || ''),
+      idempotencyKey: String(record['Idempotency Key'] || ''),
+      fingerprint: String(record.Fingerprint || '')
+    };
+    var log = findCalendarLogBooking_(bookingId);
+    if (!log && eventStatus !== 'Cancelled' && details.start instanceof Date && details.end instanceof Date) {
+      appendCalendarLogBooking_(details, config, eventStatus);
+      repairedLog += 1;
+    } else if (log) {
+      if (eventStatus === 'Cancelled') {
+        updateObjectRow_('Calendar Log', log.rowNumber, {
+          'Status': 'Cancelled', 'Sync Status': 'Synced', 'Last Synced': new Date(),
+          'Record Status': 'Archived', 'Updated At': new Date()
+        });
+      } else {
+        updateCalendarLogBooking_(log, details, config, eventStatus);
+      }
+    }
+    if (eventStatus === 'Cancelled') {
+      clearBookingSourceAppointment_(record);
+    } else {
+      var identity = resolveBookingIdentity_({lead_id: leadId, intake_id: details.intakeId});
+      if (identity.ok) {
+        updateBookingSourceLinks_(identity, details, config);
+        repairedLinks += 1;
+      }
+    }
+    updateObjectRow_('Booking Database', item.rowNumber, {
+      'Google Event ID': details.eventId,
+      'Status': eventStatus,
+      'Start': details.start,
+      'End': details.end,
+      'Meet Link': details.meetLink,
+      'Updated At': new Date(),
+      'Last Reconciled': new Date(),
+      'Reconciliation Status': 'OK',
+      'Last Error': '',
+      'Record Status': eventStatus === 'Cancelled' ? 'INACTIVE' : 'ACTIVE',
+      'Management Token Hash': eventStatus === 'Cancelled'
+        ? '' : String(record['Management Token Hash'] || '')
+    });
+    synchronized += 1;
+  });
+
+  auditBookingAction_({requestId: requestId, bookingId: '', leadId: '',
+    action: 'BOOKING_RECONCILIATION', result: issues ? 'ISSUES_FOUND' : 'SUCCESS',
+    details: {synchronized: synchronized, repairedLog: repairedLog,
+      repairedLinks: repairedLinks, skippedLegacy: skippedLegacy, issues: issues}});
+  return {
+    ok: true,
+    code: issues ? 'RECONCILIATION_COMPLETED_WITH_ISSUES' : 'RECONCILIATION_COMPLETED',
+    status: issues ? 'ISSUES_FOUND' : 'SUCCESS',
+    recordsRead: scoped.length,
+    recordsWritten: synchronized + repairedLog,
+    synchronized: synchronized,
+    repaired_calendar_log: repairedLog,
+    repaired_source_links: repairedLinks,
+    skipped_unbound_legacy: skippedLegacy,
+    issues_found: issues
+  };
+}
+
+## Calendar.gs :: getBookingRuntimeConfig_
+function getBookingRuntimeConfig_() {
+  var properties = PropertiesService.getScriptProperties();
+  var calendarId = String(properties.getProperty('CHRISTINE_CALENDAR_ID') || '').trim();
+  if (!calendarId) {
+    throw avodahError_('CALENDAR_NOT_CONFIGURED',
+      'CHRISTINE_CALENDAR_ID is required in Script Properties.');
+  }
+
+  var legacy = bookingLegacySettingsMap_();
+  var controlled = bookingControlledSettingsMap_();
+  var legacyBuffer = Number(legacy['Buffer Minutes'] || 30);
+  var duration = bookingNumberSetting_(controlled, 'APPOINTMENT_MINUTES',
+    legacy['Appointment Minutes'] || 30);
+  var buffer = bookingNumberSetting_(controlled, 'BUFFER_MINUTES', legacyBuffer);
+  var daysText = String(controlled.DAYS_AVAILABLE || legacy['Days Available'] ||
+    'Mon,Tue,Wed,Thu,Fri,Sat,Sun');
+  var environment = getEnvironment_();
+  var timezone = String(legacy['Time Zone'] || AVODAH_CONFIG.TIME_ZONE).trim();
+
+  var config = {
+    calendarId: calendarId,
+    owner: String(legacy.Owner || "Ma'am Christine").trim(),
+    timezone: timezone,
+    environment: environment,
+    days: daysText.split(',').map(function(day) { return day.trim(); }).filter(Boolean),
+    startHour: bookingNumberSetting_(controlled, 'START_HOUR', legacy['Start Hour'] || 9),
+    endHour: bookingNumberSetting_(controlled, 'END_HOUR', legacy['End Hour'] || 17),
+    durationMinutes: duration,
+    slotIntervalMinutes: bookingNumberSetting_(controlled, 'SLOT_INTERVAL_MINUTES',
+      duration + buffer),
+    bufferBeforeMinutes: bookingNumberSetting_(controlled, 'BUFFER_BEFORE_MINUTES', buffer),
+    bufferAfterMinutes: bookingNumberSetting_(controlled, 'BUFFER_AFTER_MINUTES', buffer),
+    minimumNoticeHours: bookingNumberSetting_(controlled, 'MINIMUM_NOTICE_HOURS',
+      legacy['Minimum Notice Hours'] || 24),
+    horizonDays: bookingNumberSetting_(controlled, 'BOOKING_HORIZON_DAYS',
+      legacy['Booking Horizon Days'] || 30),
+    emailReminderMinutes: bookingNumberSetting_(controlled, 'EMAIL_REMINDER_MINUTES',
+      legacy['Email Reminder Minutes'] || 1440),
+    popupReminderMinutes: bookingNumberSetting_(controlled, 'POPUP_REMINDER_MINUTES',
+      legacy['Popup Reminder Minutes'] || 60),
+    createGoogleMeet: bookingBooleanSetting_(controlled, 'CREATE_GOOGLE_MEET', true),
+    sendGuestInvites: bookingBooleanSetting_(controlled, 'SEND_GUEST_INVITES', false)
+  };
+  config.calendarBinding = bookingCalendarBinding_(config.calendarId, environment);
+  return config;
+}
+
+## Calendar.gs :: assertBookingWritesEnabled_
+function assertBookingWritesEnabled_() {
+  if (getEnvironment_() !== 'TEST') {
+    throw avodahError_('TEST_ONLY', 'This booking package is restricted to TEST.');
+  }
+  var enabled = String(PropertiesService.getScriptProperties()
+    .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+  if (enabled !== 'TRUE') {
+    throw avodahError_('BOOKING_WRITES_DISABLED',
+      'Set ENABLE_BOOKING_WORKFLOW=TRUE only for an approved TEST booking run.');
+  }
+  assertCalendarWritesEnabled_();
+}
+
+## Calendar.gs :: getBookingAvailability_
+function getBookingAvailability_() {
+  var config = getBookingRuntimeConfig_();
+  var now = new Date();
+  var earliest = new Date(now.getTime() + config.minimumNoticeHours * 60 * 60 * 1000);
+  var latest = new Date(now.getTime() + config.horizonDays * 24 * 60 * 60 * 1000);
+  var earliestParts = getDatePartsInTimezone_(earliest, config.timezone);
+  var latestParts = getDatePartsInTimezone_(latest, config.timezone);
+  var windowStart = makeDateInTimezone_(earliestParts.year, earliestParts.month - 1,
+    earliestParts.day, 0, 0, config.timezone);
+  var windowEnd = makeDateInTimezone_(latestParts.year, latestParts.month - 1,
+    latestParts.day, 23, 59, config.timezone);
+  var busy = getBookingBusyIntervals_(config, windowStart, windowEnd);
+  var blackouts = getBookingBlackouts_(config, windowStart, windowEnd);
+  var days = [];
+
+  for (var offset = 0; offset <= config.horizonDays; offset += 1) {
+    var parts = addDaysToDateParts_(earliestParts, offset);
+    var localDay = makeDateInTimezone_(parts.year, parts.month - 1, parts.day,
+      0, 0, config.timezone);
+    if (config.days.indexOf(Utilities.formatDate(localDay, config.timezone, 'EEE')) === -1) {
+      continue;
+    }
+    var slots = [];
+    for (var minuteOfDay = config.startHour * 60;
+         minuteOfDay + config.durationMinutes <= config.endHour * 60;
+         minuteOfDay += Math.max(1, config.slotIntervalMinutes)) {
+      var start = makeDateInTimezone_(parts.year, parts.month - 1, parts.day,
+        Math.floor(minuteOfDay / 60), minuteOfDay % 60, config.timezone);
+      var end = new Date(start.getTime() + config.durationMinutes * 60 * 1000);
+      if (!validateBookingSlotRules_(start, config, now).ok) continue;
+      var bufferedStart = start.getTime() - config.bufferBeforeMinutes * 60 * 1000;
+      var bufferedEnd = end.getTime() + config.bufferAfterMinutes * 60 * 1000;
+      var conflict = busy.some(function(item) {
+        return bufferedStart < item.end && bufferedEnd > item.start;
+      });
+      if (conflict || isBlockedByBlackout_(start, end, blackouts)) continue;
+      slots.push({start: start.toISOString(), end: end.toISOString(),
+        label: Utilities.formatDate(start, config.timezone, 'h:mm a')});
+    }
+    if (slots.length) {
+      days.push({
+        date: Utilities.formatDate(localDay, config.timezone, 'yyyy-MM-dd'),
+        label: Utilities.formatDate(localDay, config.timezone, 'EEE, MMM d'),
+        slots: slots
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    code: 'AVAILABILITY_OK',
+    timezone: config.timezone,
+    owner: config.owner,
+    duration_minutes: config.durationMinutes,
+    slot_interval_minutes: config.slotIntervalMinutes,
+    buffer_before_minutes: config.bufferBeforeMinutes,
+    buffer_after_minutes: config.bufferAfterMinutes,
+    days: days
+  };
+}
+
+## Calendar.gs :: bookingCalendarDescription_
+function bookingCalendarDescription_(details) {
+  return [
+    'Avodah Operations Hub consultation.',
+    'Booking ID: ' + String(details.bookingId || ''),
+    'Lead ID: ' + String(details.leadId || ''),
+    'Intake ID: ' + String(details.intakeId || '')
+  ].filter(Boolean).join('\n');
+}
+
+## Calendar.gs :: createBookingCalendarEvent_
+function createBookingCalendarEvent_(config, details) {
+  assertBookingWritesEnabled_();
+  var attendees = [];
+  if (config.sendGuestInvites && isValidEmail_(details.clientEmail)) {
+    attendees.push({email: normalizeEmail_(details.clientEmail)});
+  }
+  var event = {
+    summary: (config.environment === 'TEST' ? '[TEST] ' : '') +
+      'Avodah Consultation - ' + String(details.clientName || 'Client'),
+    description: [
+      'Avodah Operations Hub consultation.',
+      'Booking ID: ' + details.bookingId,
+      'Lead ID: ' + details.leadId,
+      'Intake ID: ' + details.intakeId
+    ].filter(Boolean).join('\n'),
+    location: config.createGoogleMeet ? 'Google Meet' : '',
+    visibility: 'private',
+    transparency: 'opaque',
+    guestsCanModify: false,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: false,
+    start: {dateTime: details.start.toISOString(), timeZone: config.timezone},
+    end: {dateTime: details.end.toISOString(), timeZone: config.timezone},
+    attendees: attendees,
+    extendedProperties: {private: {
+      source: 'avodah-operations-hub',
+      sourceVersion: AVODAH_CONFIG.VERSION,
+      environment: config.environment,
+      calendarBinding: config.calendarBinding,
+      bookingId: details.bookingId,
+      leadId: details.leadId,
+      intakeId: details.intakeId,
+      idempotencyKey: details.idempotencyKey,
+      bookingFingerprint: details.fingerprint,
+      managementTokenHash: details.managementTokenHash || ''
+    }},
+    reminders: {useDefault: false, overrides: [
+      {method: 'email', minutes: config.emailReminderMinutes},
+      {method: 'popup', minutes: config.popupReminderMinutes}
+    ]}
+  };
+  if (config.createGoogleMeet) {
+    event.conferenceData = {createRequest: {
+      requestId: ('avodah' + details.bookingId + Utilities.getUuid())
+        .toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 120),
+      conferenceSolutionKey: {type: 'hangoutsMeet'}
+    }};
+  }
+  var options = {
+    conferenceDataVersion: config.createGoogleMeet ? 1 : 0,
+    sendUpdates: attendees.length ? 'all' : 'none'
+  };
+  var created = Calendar.Events.insert(event, config.calendarId, options);
+  for (var attempt = 0; attempt < 4 && config.createGoogleMeet &&
+      !bookingEventMeetLink_(created); attempt += 1) {
+    Utilities.sleep(400 + attempt * 200);
+    created = Calendar.Events.get(config.calendarId, created.id);
+  }
+  return created;
+}
+
+## Calendar.gs :: readBookingCalendarEvent_
+function readBookingCalendarEvent_(config, eventId) {
+  if (!eventId) return null;
+  try {
+    return Calendar.Events.get(config.calendarId, eventId);
+  } catch (error) {
+    var message = String(error && error.message ? error.message : error);
+    if (/\b(404|410)\b|not found|gone/i.test(message)) return null;
+    throw error;
+  }
+}
+
+## Calendar.gs :: updateBookingCalendarEventTime_
+function updateBookingCalendarEventTime_(config, eventId, start, end) {
+  assertBookingWritesEnabled_();
+  return Calendar.Events.patch({
+    start: {dateTime: start.toISOString(), timeZone: config.timezone},
+    end: {dateTime: end.toISOString(), timeZone: config.timezone}
+  }, config.calendarId, eventId, {
+    conferenceDataVersion: 1,
+    sendUpdates: config.sendGuestInvites ? 'all' : 'none'
+  });
+}
+
+## Calendar.gs :: deleteBookingCalendarEvent_
+function deleteBookingCalendarEvent_(config, eventId) {
+  if (!eventId) return {ok: true, deleted: false};
+  assertBookingWritesEnabled_();
+  try {
+    Calendar.Events.remove(config.calendarId, eventId, {
+      sendUpdates: config.sendGuestInvites ? 'all' : 'none'
+    });
+    return {ok: true, deleted: true};
+  } catch (error) {
+    var message = String(error && error.message ? error.message : error);
+    if (/\b(404|410)\b|not found|gone/i.test(message)) {
+      return {ok: true, deleted: false, alreadyMissing: true};
+    }
+    return {ok: false, deleted: false, error: message};
+  }
+}
+
+## WebApp.gs :: assertPublicBookingEnabled_
+function assertPublicBookingEnabled_() {
+  var status = assertPublicPortalEnabled_();
+  if (!status.bookingEnabled) {
+    throw avodahError_('PUBLIC_BOOKING_DISABLED',
+      'Consultation booking is not active.');
+  }
+  assertBookingWritesEnabled_();
+  return status;
+}
+
+## WebApp.gs :: createPublicConsultationBooking
+function createPublicConsultationBooking(payload) {
+  assertPublicBookingEnabled_();
+  var input = payload || {};
+  var claims = verifyPublicWorkflowToken_(input.workflow_token || input.workflowToken);
+  var start = publicPortalText_(input.start, 80);
+  var idempotencyKey = publicPortalText_(
+    input.idempotency_key || input.idempotencyKey, 200);
+  return createConsultationBooking_({
+    intake_id: claims.intake_id,
+    lead_id: claims.lead_id,
+    start: start,
+    idempotency_key: idempotencyKey
+  }, {source: 'PUBLIC_PORTAL'});
+}
+
+## WebApp.gs :: getPublicManagedBooking
+function getPublicManagedBooking(payload) {
+  assertPublicPortalEnabled_();
+  var token = publicManagementToken_(payload);
+  var config = getBookingRuntimeConfig_();
+  var item = resolveManagedBookingV4_({management_token: token}, config);
+  if (!item) {
+    return {ok: false, code: 'BOOKING_NOT_FOUND',
+      message: 'The booking could not be found.', retryable: false};
+  }
+  return publicManagedBookingResult_(item, config);
+}
+
+## WebApp.gs :: reschedulePublicConsultationBooking
+function reschedulePublicConsultationBooking(payload) {
+  assertPublicBookingEnabled_();
+  var token = publicManagementToken_(payload);
+  return rescheduleConsultationBooking_({
+    management_token: token,
+    start: publicPortalText_((payload || {}).start, 80)
+  }, {source: 'PUBLIC_PORTAL_MANAGEMENT'});
+}
+
+## WebApp.gs :: cancelPublicConsultationBooking
+function cancelPublicConsultationBooking(payload) {
+  assertPublicBookingEnabled_();
+  var token = publicManagementToken_(payload);
+  return cancelConsultationBooking_({
+    management_token: token,
+    reason: publicPortalText_((payload || {}).reason, 500)
+  }, {source: 'PUBLIC_PORTAL_MANAGEMENT'});
+}
+
