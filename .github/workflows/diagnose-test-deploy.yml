@@ -1,0 +1,107 @@
+name: Diagnose TEST Apps Script Deployment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/diagnose-test-deploy.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run safe diagnostics
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set +e
+          mkdir -p diagnostics
+          REPORT="diagnostics/latest-test-deploy.txt"
+          : > "$REPORT"
+          echo "TEST Apps Script deployment diagnostic" >> "$REPORT"
+          echo "commit=${GITHUB_SHA}" >> "$REPORT"
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$REPORT"
+
+          if [ -n "$CLASPRC_JSON" ]; then
+            echo "CLASPRC_JSON_present=yes" >> "$REPORT"
+          else
+            echo "CLASPRC_JSON_present=no" >> "$REPORT"
+          fi
+
+          node -e 'JSON.parse(process.env.CLASPRC_JSON || "");' >/tmp/jsoncheck.log 2>&1
+          JSON_CODE=$?
+          echo "CLASPRC_JSON_valid_json=$([ $JSON_CODE -eq 0 ] && echo yes || echo no)" >> "$REPORT"
+
+          mkdir -p "$HOME"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+
+          npm install --global @google/clasp >/tmp/npm-install.log 2>&1
+          NPM_CODE=$?
+          echo "npm_install_clasp_exit=$NPM_CODE" >> "$REPORT"
+          if [ $NPM_CODE -ne 0 ]; then
+            echo "npm_install_clasp_error:" >> "$REPORT"
+            tail -20 /tmp/npm-install.log | sed -E 's/(token|secret|password|refresh_token|access_token)[^ ]*/[REDACTED]/Ig' >> "$REPORT"
+          fi
+
+          clasp --version >/tmp/clasp-version.log 2>&1
+          CLASP_VERSION_CODE=$?
+          echo "clasp_version_exit=$CLASP_VERSION_CODE" >> "$REPORT"
+          if [ $CLASP_VERSION_CODE -eq 0 ]; then
+            printf 'clasp_version=' >> "$REPORT"
+            tr '\n' ' ' < /tmp/clasp-version.log >> "$REPORT"
+            echo >> "$REPORT"
+          fi
+
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+
+          rm -rf src
+          mkdir -p src
+          clasp pull >/tmp/clasp-pull.log 2>&1
+          PULL_CODE=$?
+          echo "clasp_pull_exit=$PULL_CODE" >> "$REPORT"
+          if [ $PULL_CODE -ne 0 ]; then
+            echo "clasp_pull_error:" >> "$REPORT"
+            tail -30 /tmp/clasp-pull.log \
+              | sed -E 's/(token|secret|password|refresh_token|access_token)[^ ]*/[REDACTED]/Ig' \
+              | sed -E 's/[A-Za-z0-9_\.-]{80,}/[LONG_VALUE_REDACTED]/g' >> "$REPORT"
+          else
+            echo "pulled_appsscript_json=$([ -f src/appsscript.json ] && echo yes || echo no)" >> "$REPORT"
+            echo "pulled_Calendar_gs=$([ -f src/Calendar.gs ] && echo yes || echo no)" >> "$REPORT"
+            echo "pulled_LegacyV3_gs=$([ -f src/LegacyV3.gs ] && echo yes || echo no)" >> "$REPORT"
+            echo "pulled_WebApp_gs=$([ -f src/WebApp.gs ] && echo yes || echo no)" >> "$REPORT"
+            echo "pulled_Bookings_gs=$([ -f src/Bookings.gs ] && echo yes || echo no)" >> "$REPORT"
+            echo "pulled_FoundationTests_gs=$([ -f src/FoundationTests.gs ] && echo yes || echo no)" >> "$REPORT"
+          fi
+
+          echo "diagnostic_complete=yes" >> "$REPORT"
+
+      - name: Commit sanitized diagnostic report
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add diagnostics/latest-test-deploy.txt
+          git commit -m "Record TEST Apps Script deployment diagnostic" || exit 0
+          git push
