@@ -34,14 +34,30 @@ jobs:
           }
           JSON
 
-      - name: Verify TEST source exists
+      - name: Pull current TEST Apps Script source
         run: |
+          rm -rf src
+          mkdir -p src
+          clasp pull
           test -f src/appsscript.json
           test -f src/Calendar.gs
           test -f src/LegacyV3.gs
           test -f src/WebApp.gs
+          test -f src/Bookings.gs
 
-      - name: Push TEST source
+      - name: Apply TEST v1.1.1 security hardening
+        run: node scripts/harden-v1.1.1.js
+
+      - name: Fail-closed static verification
+        shell: bash
+        run: |
+          ! grep -R -n "Manage appointment:.*managementUrl" src/Calendar.gs src/LegacyV3.gs
+          ! grep -R -n "details.managementUrl" src/Calendar.gs src/LegacyV3.gs
+          grep -q "Management Token Hash.*''" src/Bookings.gs
+          grep -q "publicManagedBookingResult_" src/WebApp.gs
+          node --check scripts/harden-v1.1.1.js
+
+      - name: Push hardened TEST source
         run: clasp push --force
 
       - name: Create immutable Apps Script version
