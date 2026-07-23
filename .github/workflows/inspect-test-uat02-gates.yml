@@ -1,0 +1,82 @@
+name: Inspect TEST UAT-02 Gates
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat02-gates.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull TEST source and inspect UAT-02 controls
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          REPORT="diagnostics/latest-test-uat02-gate-inspection.txt"
+          {
+            echo "TEST UAT-02 gate inspection"
+            echo "commit=${GITHUB_SHA}"
+            echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "gate_and_public_control_lines:"
+            grep -R -n -E "PUBLIC|PORTAL|INTAKE|WRITE|ENABLE|GATE|submitPublicIntake|publicPortalGateStatus_|assertPublicPortalEnabled_|assertPublicBookingEnabled_" \
+              src/Config.gs src/WebApp.gs src/Intake.gs src/Setup.gs 2>/dev/null \
+              | sed -E 's/(WEBHOOK_SECRET|TOKEN|SECRET|PASSWORD)[^[:space:]]*/[REDACTED]/Ig' \
+              | head -250 || true
+            echo "top_level_functions:"
+            for f in src/WebApp.gs src/Intake.gs src/Config.gs; do
+              [ -f "$f" ] || continue
+              grep -E '^function[[:space:]]+[A-Za-z0-9_]+[[:space:]]*\(' "$f" \
+                | sed -E "s/^function[[:space:]]+([A-Za-z0-9_]+).*/$(basename "$f"):\1/" || true
+            done
+            echo "write_operations_performed=no"
+          } > "$REPORT"
+
+      - name: Publish sanitized inspection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat02-gate-inspection.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-02 gate inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-02 gate inspection" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
