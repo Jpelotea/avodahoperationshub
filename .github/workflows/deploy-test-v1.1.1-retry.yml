@@ -35,12 +35,12 @@ jobs:
         id: auth
         shell: bash
         env:
-          CLASPRC_B64: ${{ secrets.CLASPRC_B64 }}
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
         run: |
           set -euo pipefail
-          test -n "${CLASPRC_B64:-}"
+          test -n "${CLASPRC_JSON:-}"
           mkdir -p "$HOME"
-          printf '%s' "$CLASPRC_B64" | base64 --decode > "$HOME/.clasprc.json"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
           chmod 600 "$HOME/.clasprc.json"
           node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));'
           cat > .clasp.json <<'JSON'
@@ -105,6 +105,8 @@ jobs:
         if: always()
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
           INSTALL_OUTCOME: ${{ steps.install_clasp.outcome }}
           AUTH_OUTCOME: ${{ steps.auth.outcome }}
           PULL_OUTCOME: ${{ steps.pull.outcome }}
@@ -115,8 +117,10 @@ jobs:
           REDEPLOY_OUTCOME: ${{ steps.redeploy.outcome }}
           VERSION: ${{ steps.version.outputs.number }}
         run: |
+          set -euo pipefail
           mkdir -p diagnostics
-          cat > diagnostics/latest-test-deploy-retry.txt <<EOF
+          REPORT="diagnostics/latest-test-deploy-retry.txt"
+          cat > "$REPORT" <<EOF
           TEST Apps Script v1.1.1 retry result
           commit=${GITHUB_SHA}
           utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -130,8 +134,21 @@ jobs:
           redeploy=${REDEPLOY_OUTCOME}
           apps_script_version=${VERSION}
           EOF
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add diagnostics/latest-test-deploy-retry.txt
-          git commit -m "Record TEST v1.1.1 deployment retry result" || exit 0
-          git push
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-deploy-retry.txt?ref=main" \
+            | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST v1.1.1 deployment retry result" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST v1.1.1 deployment retry result" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-deploy-retry.txt" \
+            -d @/tmp/payload.json >/dev/null
