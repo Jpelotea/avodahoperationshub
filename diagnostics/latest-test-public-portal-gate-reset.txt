@@ -1,0 +1,11 @@
+TEST public portal gate reset
+commit=3226fab7eb9ffa8cba53aead70191f040f40b66c
+utc=2026-07-23T12:39:48Z
+preserve_source=success
+build_reset_endpoint=success
+deploy_reset_endpoint=success
+reset_public_portal_gate=failure
+restore_hardened_source_and_at_2=success
+temporary_apps_script_version=4
+production_touched=no
+raw_token_recorded=no
