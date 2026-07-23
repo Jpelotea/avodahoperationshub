@@ -1,0 +1,64 @@
+name: Deploy TEST Apps Script
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm install --global @google/clasp
+
+      - name: Configure clasp authentication
+        shell: bash
+        run: |
+          mkdir -p "$HOME"
+          printf '%s' '${{ secrets.CLASPRC_JSON }}' > "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src"
+          }
+          JSON
+
+      - name: Verify TEST source exists
+        run: |
+          test -f src/appsscript.json
+          test -f src/Calendar.gs
+          test -f src/LegacyV3.gs
+          test -f src/WebApp.gs
+
+      - name: Push TEST source
+        run: clasp push --force
+
+      - name: Create immutable Apps Script version
+        id: version
+        shell: bash
+        run: |
+          OUTPUT="$(clasp version 'TEST v1.1.1 - management-token Calendar exposure hardened')"
+          echo "$OUTPUT"
+          VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
+          test -n "$VERSION"
+          echo "number=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy existing TEST web app
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+          VERSION: ${{ steps.version.outputs.number }}
+        run: clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - management-token Calendar exposure hardened; all write gates disabled"
+
+      - name: List deployments
+        run: clasp deployments
