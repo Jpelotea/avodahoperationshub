@@ -1,0 +1,89 @@
+name: Deploy TEST v1.1.1 JSON V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/deploy-test-json-v2.trigger'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: TEST
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm install --global @google/clasp
+
+      - name: Configure TEST Apps Script authentication
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${CLASPRC_JSON:-}"
+          mkdir -p "$HOME"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));'
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+
+      - name: Pull current TEST source
+        run: |
+          set -euo pipefail
+          rm -rf src
+          mkdir -p src
+          clasp pull
+          test -f src/appsscript.json
+          test -f src/Calendar.gs
+          test -f src/LegacyV3.gs
+          test -f src/WebApp.gs
+          test -f src/Bookings.gs
+          test -f src/FoundationTests.gs
+
+      - name: Apply v1.1.1 security hardening
+        run: node scripts/harden-v1.1.1.js
+
+      - name: Verify hardened source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n "Manage appointment:.*managementUrl" src/Calendar.gs src/LegacyV3.gs
+          ! grep -R -n "details.managementUrl" src/Calendar.gs src/LegacyV3.gs
+          grep -q "Management Token Hash.*''" src/Bookings.gs
+          grep -q "publicManagedBookingResult_" src/WebApp.gs
+          node --check scripts/harden-v1.1.1.js
+          for f in src/*.gs; do node --check < "$f"; done
+
+      - name: Push hardened TEST source
+        run: clasp push --force
+
+      - name: Create Apps Script version and redeploy TEST web app
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          OUTPUT="$(clasp version 'TEST v1.1.1 - management-token Calendar exposure hardened')"
+          echo "$OUTPUT"
+          VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
+          test -n "$VERSION"
+          clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - management-token Calendar exposure hardened; all write gates disabled"
+          clasp deployments
