@@ -1,0 +1,104 @@
+name: Diagnose TEST Apps Script Source Layout
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/diagnose-test-source-layout.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Pull and inventory TEST source
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set +e
+          mkdir -p diagnostics "$HOME" src
+          REPORT="diagnostics/latest-test-source-layout.txt"
+          : > "$REPORT"
+          echo "TEST Apps Script source layout diagnostic" >> "$REPORT"
+          echo "commit=${GITHUB_SHA}" >> "$REPORT"
+          echo "utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$REPORT"
+
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+
+          npm install --global @google/clasp >/tmp/npm-install.log 2>&1
+          echo "npm_install_clasp_exit=$?" >> "$REPORT"
+          rm -rf src
+          mkdir -p src
+          clasp pull >/tmp/clasp-pull.log 2>&1
+          PULL_CODE=$?
+          echo "clasp_pull_exit=$PULL_CODE" >> "$REPORT"
+          echo "files:" >> "$REPORT"
+          find src -maxdepth 2 -type f -printf '%P\n' 2>/dev/null | sort >> "$REPORT"
+          echo "expected_checks:" >> "$REPORT"
+          for base in appsscript Calendar LegacyV3 WebApp Bookings FoundationTests; do
+            FOUND="$(find src -maxdepth 2 -type f \( -name "$base.gs" -o -name "$base.js" -o -name "$base.json" \) -printf '%P' -quit 2>/dev/null)"
+            if [ -n "$FOUND" ]; then
+              echo "$base=found:$FOUND" >> "$REPORT"
+            else
+              echo "$base=missing" >> "$REPORT"
+            fi
+          done
+          if [ $PULL_CODE -ne 0 ]; then
+            echo "clasp_pull_error:" >> "$REPORT"
+            tail -30 /tmp/clasp-pull.log \
+              | sed -E 's/(token|secret|password|refresh_token|access_token)[^ ]*/[REDACTED]/Ig' \
+              | sed -E 's/[A-Za-z0-9_\.-]{80,}/[LONG_VALUE_REDACTED]/g' >> "$REPORT"
+          fi
+          echo "diagnostic_complete=yes" >> "$REPORT"
+
+      - name: Publish sanitized source layout
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-source-layout.txt"
+          test -f "$REPORT"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-source-layout.txt?ref=main" \
+            | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST source layout diagnostic" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST source layout diagnostic" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-source-layout.txt" \
+            -d @/tmp/payload.json >/dev/null
