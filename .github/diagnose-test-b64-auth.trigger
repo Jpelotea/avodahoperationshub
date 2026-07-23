@@ -1,1 +1,2 @@
 diagnose TEST CLASPRC_B64 authentication
+retry after replacing CLASPRC_B64
