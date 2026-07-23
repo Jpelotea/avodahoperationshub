@@ -1,0 +1,155 @@
+TEST UAT-02 gate-control inspection
+commit=fede1b8199f9a407f3b2b0635c9a7b6262523928
+utc=2026-07-23T12:10:36Z
+property_write_references:
+src/Bookings.gs:590:    .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+src/Calendar.gs:93:    .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+src/Calendar.gs:96:      'Set ENABLE_BOOKING_WORKFLOW=TRUE only for an approved TEST booking run.');
+src/Code.gs:282:    PropertiesService.getScriptProperties().getProperty("ENABLE_CALENDAR_WRITES") || ""
+src/Code.gs:285:    throw new Error("Calendar writes are disabled. Set ENABLE_CALENDAR_WRITES=TRUE only after TEST calendar verification.");
+src/Code.gs:1828:    props.setProperty(key, String(now));
+src/Code.gs:2859:  const calendarWritesEnabled = String(properties.getProperty("ENABLE_CALENDAR_WRITES") || "")
+src/Code.gs:2861:  const bookingWorkflowEnabled = String(properties.getProperty("ENABLE_BOOKING_WORKFLOW") || "")
+src/Config.gs:27:    'ENABLE_BOOKING_WORKFLOW',
+src/Config.gs:32:    'ENABLE_CALENDAR_WRITES',
+src/Config.gs:33:    'PUBLIC_PORTAL_ENABLED',
+src/FoundationTests.gs:376:    'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+src/FoundationTests.gs:378:    'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+src/FoundationTests.gs:379:    'PUBLIC_PORTAL_ENABLED', 'ENABLE_AUTOMATION_TRIGGERS'
+src/Recruitment.gs:42:    calendarWriteEnabled: recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES'),
+src/Recruitment.gs:269:  response.write_gate_enabled = recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES');
+src/Recruitment.gs:284:      recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES')};
+src/ScheduleImport.gs:46:    .getProperty('ENABLE_CALENDAR_WRITES');
+src/ScheduleImport.gs:49:      'Schedule Import commit also requires ENABLE_CALENDAR_WRITES=TRUE.');
+src/ScheduleImport.gs:533:      .getProperty('ENABLE_CALENDAR_WRITES')),
+src/Setup.gs:31:  PropertiesService.getScriptProperties().setProperties(accepted, false);
+src/Setup.gs:262:    'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+src/Setup.gs:264:    'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+src/Setup.gs:265:    'PUBLIC_PORTAL_ENABLED', 'ENABLE_AUTOMATION_TRIGGERS'
+src/Setup.gs:363:  if (!gates.PUBLIC_PORTAL_ENABLED) blockers.push('PUBLIC_PORTAL_DISABLED');
+src/WebApp.gs:53:  var enabled = truthy_(properties.getProperty('PUBLIC_PORTAL_ENABLED'));
+src/WebApp.gs:55:    truthy_(properties.getProperty('ENABLE_BOOKING_WORKFLOW')) &&
+src/WebApp.gs:56:    truthy_(properties.getProperty('ENABLE_CALENDAR_WRITES'));
+simple_trigger_functions:
+src/Code.gs:40:function doPost(e) {
+src/Code.gs:153:function doGet(e) {
+src/Code.gs:2746:function onEdit(e) {
+src/Code.gs:2792:function onOpen() {
+config_setup_functions:
+Setup.gs:setInitialScriptProperties
+Setup.gs:masterSetup
+Setup.gs:seedDefaultSettings_
+Setup.gs:verifyConfiguration_
+Setup.gs:getScriptPropertyStatus_
+Setup.gs:getActiveSettingsByGroupSafe_
+Setup.gs:verifyCalendarAccess_
+Setup.gs:runDeploymentReadinessAudit
+Code.gs:getConfiguredTestSpreadsheetId_
+Code.gs:doPost
+Code.gs:doGet
+Code.gs:appendLead_
+Code.gs:getBookingConfig_
+Code.gs:getCalendar_
+Code.gs:assertCalendarWritesEnabled_
+Code.gs:getAvailability_
+Code.gs:bookConsultation_
+Code.gs:validateRequestedSlot_
+Code.gs:createCalendarEvent_
+Code.gs:deleteCalendarEvent_
+Code.gs:updateLead_
+Code.gs:addCalendarLog_
+Code.gs:getNextCalendarLogRow_
+Code.gs:findExistingBooking_
+Code.gs:safeCell_
+Code.gs:jsonResponse_
+Code.gs:isUuidV4_
+Code.gs:isAuthorizedWebhookSecret_
+Code.gs:acquireScriptLock_
+Code.gs:apiJsonResponse_
+Code.gs:bookingFingerprint_
+Code.gs:findBookingByIdempotencyKey_
+Code.gs:calendarBookingResultFromRow_
+Code.gs:getLastCalendarLogDataRow_
+Code.gs:getDatePartsInTimezone_
+Code.gs:addDaysToDateParts_
+Code.gs:timezoneOffsetMinutes_
+Code.gs:makeDateInTimezone_
+Code.gs:timeFractionInTimezone_
+Code.gs:getBookingBlackouts_
+Code.gs:isBlockedByBlackout_
+Code.gs:generateManagementToken_
+Code.gs:hashManagementToken_
+Code.gs:getManagementBaseUrl_
+Code.gs:buildManagementUrl_
+Code.gs:getAdminAlertEmail_
+Code.gs:calendarConflictExists_
+Code.gs:getCalendarEventResource_
+Code.gs:updateCalendarEventTime_
+Code.gs:getEventMeetLink_
+Code.gs:eventDate_
+Code.gs:findLeadRowById_
+Code.gs:findCalendarLogRowByBookingId_
+Code.gs:updateCalendarLogForReschedule_
+Code.gs:updateCalendarLogForCancellation_
+Code.gs:updateLeadAfterCancellation_
+Code.gs:findRegistryByToken_
+Code.gs:findRegistryByBookingId_
+Code.gs:registryRecordFromRow_
+Code.gs:upsertBookingRegistry_
+Code.gs:updateRegistryAfterManagementAction_
+Code.gs:getManagedBookingStatus_
+Code.gs:rescheduleManagedBooking_
+Code.gs:cancelManagedBooking_
+Code.gs:listManagedCalendarEvents_
+Code.gs:extractBookingMetaFromNotes_
+Code.gs:bootstrapRegistryFromCalendarLog_
+Code.gs:bootstrapRegistryFromCalendar_
+Code.gs:reconcileBookingData
+Code.gs:reconcileBookingData_
+Code.gs:recordReconciliationIssue_
+Code.gs:sendAdminAlert_
+Code.gs:scheduledBookingReconciliation
+Code.gs:installV3MaintenanceTriggers
+Code.gs:removeV3MaintenanceTriggers
+Code.gs:normalizeImportedText_
+Code.gs:buildScheduleImportDuplicateIndex_
+Code.gs:scheduleImportSignature_
+Code.gs:ensureProductionSupportSheets_
+Code.gs:logBookingAudit_
+Code.gs:testAvailability
+Code.gs:testSheetsAccess
+Code.gs:testCalendarAccess
+Code.gs:previewMonthlyScheduleImport
+Code.gs:commitScheduleImportPreview
+Code.gs:detectImportMonthYear_
+Code.gs:parseMonthlyMatrix_
+Code.gs:parseScheduleCell_
+Code.gs:parseInterviewBlocks_
+Code.gs:parseSingleSchedulePart_
+Code.gs:buildScheduleEvent_
+Code.gs:adjustSequentialEndTimes_
+Code.gs:classifyScheduleCategory_
+Code.gs:classifyScheduleActivityType_
+Code.gs:defaultDurationMinutes_
+Code.gs:scheduleImportExists_
+Code.gs:monthNameToIndex_
+Code.gs:buildTimeDate_
+Code.gs:inferMeridiemForPeriod_
+Code.gs:timeFractionFromDate_
+Code.gs:cleanScheduleTitle_
+Code.gs:normalizeKeyText_
+Code.gs:normalizeDateDisplay_
+Code.gs:toA1_
+Code.gs:refreshChristineCalendarColorCoding
+Code.gs:refreshChristineCalendarColorCoding_
+Code.gs:getCalendarDisplayTitle_
+Code.gs:removeLegacyMonthlyCalendarColorRules_
+Code.gs:onEdit
+Code.gs:onOpen
+Code.gs:runProductionCleanup
+Code.gs:productionHealthCheck
+Code.gs:testV3ResilienceSetup
+Code.gs:testBasicRuntime
+Code.gs:testCalendarWriteAccess
+Code.gs:authorizeConfiguredTestScopes
+write_operations_performed=no
