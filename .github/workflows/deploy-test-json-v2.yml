@@ -8,6 +8,9 @@ on:
     paths:
       - '.github/deploy-test-json-v2.trigger'
 
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -23,9 +26,11 @@ jobs:
           node-version: '20'
 
       - name: Install clasp
+        id: install
         run: npm install --global @google/clasp
 
       - name: Configure TEST Apps Script authentication
+        id: auth
         shell: bash
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
@@ -46,6 +51,7 @@ jobs:
           JSON
 
       - name: Pull current TEST source
+        id: pull
         run: |
           set -euo pipefail
           rm -rf src
@@ -59,9 +65,11 @@ jobs:
           test -f src/FoundationTests.gs
 
       - name: Apply v1.1.1 security hardening
+        id: harden
         run: node scripts/harden-v1.1.1.js
 
       - name: Verify hardened source
+        id: verify
         shell: bash
         run: |
           set -euo pipefail
@@ -73,17 +81,79 @@ jobs:
           for f in src/*.gs; do node --check < "$f"; done
 
       - name: Push hardened TEST source
+        id: push_source
         run: clasp push --force
 
-      - name: Create Apps Script version and redeploy TEST web app
+      - name: Create Apps Script version
+        id: version
         shell: bash
-        env:
-          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
         run: |
           set -euo pipefail
           OUTPUT="$(clasp version 'TEST v1.1.1 - management-token Calendar exposure hardened')"
           echo "$OUTPUT"
           VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
           test -n "$VERSION"
+          echo "number=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy TEST web app
+        id: redeploy
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
           clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - management-token Calendar exposure hardened; all write gates disabled"
           clasp deployments
+
+      - name: Record sanitized V2 deployment result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          AUTH_OUTCOME: ${{ steps.auth.outcome }}
+          PULL_OUTCOME: ${{ steps.pull.outcome }}
+          HARDEN_OUTCOME: ${{ steps.harden.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          PUSH_OUTCOME: ${{ steps.push_source.outcome }}
+          VERSION_OUTCOME: ${{ steps.version.outcome }}
+          REDEPLOY_OUTCOME: ${{ steps.redeploy.outcome }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          REPORT="diagnostics/latest-test-json-v2-result.txt"
+          cat > "$REPORT" <<EOF
+          TEST Apps Script v1.1.1 JSON V2 deployment result
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          install=${INSTALL_OUTCOME}
+          auth=${AUTH_OUTCOME}
+          pull=${PULL_OUTCOME}
+          harden=${HARDEN_OUTCOME}
+          verify=${VERIFY_OUTCOME}
+          push_source=${PUSH_OUTCOME}
+          version=${VERSION_OUTCOME}
+          redeploy=${REDEPLOY_OUTCOME}
+          apps_script_version=${VERSION}
+          EOF
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-json-v2-result.txt?ref=main" \
+            | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST JSON V2 deployment result" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST JSON V2 deployment result" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-json-v2-result.txt" \
+            -d @/tmp/payload.json >/dev/null
