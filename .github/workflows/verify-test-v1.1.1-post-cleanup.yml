@@ -1,0 +1,138 @@
+name: Verify TEST v1.1.1 Post Cleanup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/verify-test-v1.1.1-post-cleanup.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure TEST Apps Script authentication
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+
+      - name: Pull live TEST source
+        id: pull
+        run: |
+          set -euo pipefail
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Calendar.gs
+          test -f src/Bookings.gs
+          test -f src/WebApp.gs
+          test -f src/FoundationTests.gs
+
+      - name: Verify v1.1.1 hardening markers
+        id: hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "function bookingCalendarDescription_" src/Calendar.gs
+          ! grep -q "details.managementUrl ? 'Manage appointment:" src/Calendar.gs
+          ! grep -q "managementUrl: management.url" src/Bookings.gs
+          grep -q "'Management Token Hash': ''" src/Bookings.gs
+          grep -q "function publicManagedBookingResult_" src/Bookings.gs
+          grep -q "return publicManagedBookingResult_(item, config);" src/WebApp.gs
+          grep -q "modular Calendar description excludes management bearer URL" src/FoundationTests.gs
+          grep -q "public management response omits internal linkage identifiers" src/FoundationTests.gs
+          grep -q "inactive booking management response fails closed" src/FoundationTests.gs
+          for f in src/*.gs; do node --check < "$f"; done
+
+      - name: Verify TEST deployment version
+        id: deployment
+        shell: bash
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+        run: |
+          set -euo pipefail
+          clasp deployments > /tmp/deployments.txt
+          grep -q "$DEPLOYMENT_ID" /tmp/deployments.txt
+          grep "$DEPLOYMENT_ID" /tmp/deployments.txt > /tmp/target-deployment.txt
+          grep -Eq '@2([^0-9]|$)|version[^0-9]*2([^0-9]|$)' /tmp/target-deployment.txt
+
+      - name: Verify deployment workflow is manual-only
+        id: workflow_lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "workflow_dispatch:" .github/workflows/deploy-test-json-v2.yml
+          ! grep -qE '^  push:' .github/workflows/deploy-test-json-v2.yml
+
+      - name: Record verification result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PULL_OUTCOME: ${{ steps.pull.outcome }}
+          HARDENING_OUTCOME: ${{ steps.hardening.outcome }}
+          DEPLOYMENT_OUTCOME: ${{ steps.deployment.outcome }}
+          WORKFLOW_LOCK_OUTCOME: ${{ steps.workflow_lock.outcome }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-v1.1.1-post-cleanup-verification.txt"
+          TARGET_DEPLOYMENT="unknown"
+          if [ -s /tmp/target-deployment.txt ]; then
+            TARGET_DEPLOYMENT="$(cat /tmp/target-deployment.txt | sed -E 's/[A-Za-z0-9_\.-]{80,}/[LONG_VALUE_REDACTED]/g')"
+          fi
+          cat > "$REPORT" <<EOF
+          TEST v1.1.1 post-cleanup verification
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          pull_live_source=${PULL_OUTCOME}
+          hardening_static_regression=${HARDENING_OUTCOME}
+          deployment_version_check=${DEPLOYMENT_OUTCOME}
+          deployment_workflow_manual_only=${WORKFLOW_LOCK_OUTCOME}
+          target_deployment=${TARGET_DEPLOYMENT}
+          write_operations_performed=no
+          EOF
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-v1.1.1-post-cleanup-verification.txt?ref=main" \
+            | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST v1.1.1 post-cleanup verification" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST v1.1.1 post-cleanup verification" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$REPOSITORY/contents/diagnostics/latest-test-v1.1.1-post-cleanup-verification.txt" \
+            -d @/tmp/payload.json >/dev/null
