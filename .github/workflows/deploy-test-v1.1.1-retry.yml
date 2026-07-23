@@ -1,0 +1,137 @@
+name: Deploy TEST Apps Script v1.1.1 Retry
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/deploy-test-v1.1.1-retry.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-test-apps-script
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        id: install_clasp
+        run: npm install --global @google/clasp
+
+      - name: Configure clasp authentication
+        id: auth
+        shell: bash
+        env:
+          CLASPRC_B64: ${{ secrets.CLASPRC_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "${CLASPRC_B64:-}"
+          mkdir -p "$HOME"
+          printf '%s' "$CLASPRC_B64" | base64 --decode > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          node -e 'JSON.parse(require("fs").readFileSync(process.env.HOME + "/.clasprc.json", "utf8"));'
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+
+      - name: Pull current TEST Apps Script source
+        id: pull
+        run: |
+          rm -rf src
+          mkdir -p src
+          clasp pull
+          test -f src/appsscript.json
+          test -f src/Calendar.gs
+          test -f src/LegacyV3.gs
+          test -f src/WebApp.gs
+          test -f src/Bookings.gs
+          test -f src/FoundationTests.gs
+
+      - name: Apply TEST v1.1.1 security hardening
+        id: harden
+        run: node scripts/harden-v1.1.1.js
+
+      - name: Fail-closed static verification
+        id: verify
+        shell: bash
+        run: |
+          ! grep -R -n "Manage appointment:.*managementUrl" src/Calendar.gs src/LegacyV3.gs
+          ! grep -R -n "details.managementUrl" src/Calendar.gs src/LegacyV3.gs
+          grep -q "Management Token Hash.*''" src/Bookings.gs
+          grep -q "publicManagedBookingResult_" src/WebApp.gs
+          node --check scripts/harden-v1.1.1.js
+          for f in src/*.gs; do node --check < "$f"; done
+
+      - name: Push hardened TEST source
+        id: push_source
+        run: clasp push --force
+
+      - name: Create immutable Apps Script version
+        id: version
+        shell: bash
+        run: |
+          OUTPUT="$(clasp version 'TEST v1.1.1 - management-token Calendar exposure hardened')"
+          echo "$OUTPUT"
+          VERSION="$(printf '%s\n' "$OUTPUT" | grep -Eo '[0-9]+' | tail -1)"
+          test -n "$VERSION"
+          echo "number=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Redeploy existing TEST web app
+        id: redeploy
+        env:
+          DEPLOYMENT_ID: AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS
+          VERSION: ${{ steps.version.outputs.number }}
+        run: clasp redeploy "$DEPLOYMENT_ID" "$VERSION" "TEST v1.1.1 - management-token Calendar exposure hardened; all write gates disabled"
+
+      - name: Record sanitized retry result
+        if: always()
+        shell: bash
+        env:
+          INSTALL_OUTCOME: ${{ steps.install_clasp.outcome }}
+          AUTH_OUTCOME: ${{ steps.auth.outcome }}
+          PULL_OUTCOME: ${{ steps.pull.outcome }}
+          HARDEN_OUTCOME: ${{ steps.harden.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          PUSH_OUTCOME: ${{ steps.push_source.outcome }}
+          VERSION_OUTCOME: ${{ steps.version.outcome }}
+          REDEPLOY_OUTCOME: ${{ steps.redeploy.outcome }}
+          VERSION: ${{ steps.version.outputs.number }}
+        run: |
+          mkdir -p diagnostics
+          cat > diagnostics/latest-test-deploy-retry.txt <<EOF
+          TEST Apps Script v1.1.1 retry result
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          install_clasp=${INSTALL_OUTCOME}
+          auth=${AUTH_OUTCOME}
+          pull=${PULL_OUTCOME}
+          harden=${HARDEN_OUTCOME}
+          verify=${VERIFY_OUTCOME}
+          push_source=${PUSH_OUTCOME}
+          version=${VERSION_OUTCOME}
+          redeploy=${REDEPLOY_OUTCOME}
+          apps_script_version=${VERSION}
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add diagnostics/latest-test-deploy-retry.txt
+          git commit -m "Record TEST v1.1.1 deployment retry result" || exit 0
+          git push
