@@ -1,0 +1,11 @@
+TEST UAT-02 manual runner install
+commit=be884364a848650d8782a9f5991cd38fbfc057d7
+utc=2026-07-23T13:39:58Z
+runner_file=UAT02Manual.gs
+runner_function=runPhase6Uat02Manual
+live_source_push=success
+deployment_changed=no
+script_properties_changed=no
+spreadsheet_changed=no
+calendar_changed=no
+production_touched=no
