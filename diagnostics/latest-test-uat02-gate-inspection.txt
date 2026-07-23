@@ -1,0 +1,102 @@
+TEST UAT-02 gate inspection
+commit=0c7ed5fd71b602378a6e9501339c4b92072a9c1c
+utc=2026-07-23T12:06:27Z
+gate_and_public_control_lines:
+src/Config.gs:27:    'ENABLE_BOOKING_WORKFLOW',
+src/Config.gs:28:    'ENABLE_PROJECT1_WRITES',
+src/Config.gs:29:    'ENABLE_RECRUITMENT_WRITES',
+src/Config.gs:30:    'ENABLE_ANALYTICS_WRITES',
+src/Config.gs:31:    'ENABLE_SCHEDULE_IMPORT_WRITES',
+src/Config.gs:32:    'ENABLE_CALENDAR_WRITES',
+src/Config.gs:33:    'PUBLIC_PORTAL_ENABLED',
+src/Config.gs:34:    'ENABLE_AUTOMATION_TRIGGERS',
+src/Config.gs:39:    INTAKE: 'INT',
+src/WebApp.gs:25:    code: 'FOUNDATION_GATE',
+src/WebApp.gs:51:function publicPortalGateStatus_() {
+src/WebApp.gs:53:  var enabled = truthy_(properties.getProperty('PUBLIC_PORTAL_ENABLED'));
+src/WebApp.gs:55:    truthy_(properties.getProperty('ENABLE_BOOKING_WORKFLOW')) &&
+src/WebApp.gs:56:    truthy_(properties.getProperty('ENABLE_CALENDAR_WRITES'));
+src/WebApp.gs:67:  var status = publicPortalGateStatus_();
+src/WebApp.gs:78:  var status = publicPortalGateStatus_();
+src/WebApp.gs:98:function assertPublicPortalEnabled_() {
+src/WebApp.gs:99:  var status = publicPortalGateStatus_();
+src/WebApp.gs:105:    throw avodahError_('PUBLIC_PORTAL_DISABLED',
+src/WebApp.gs:117:function assertPublicBookingEnabled_() {
+src/WebApp.gs:118:  var status = assertPublicPortalEnabled_();
+src/WebApp.gs:120:    throw avodahError_('PUBLIC_BOOKING_DISABLED',
+src/WebApp.gs:183:  return 'AVODAH_PUBLIC_' + String(scope || 'ACTION').toUpperCase() + '_' +
+src/WebApp.gs:202:    throw avodahError_('PUBLIC_[REDACTED]
+src/WebApp.gs:241:    kind: 'PUBLIC_BOOKING',
+src/WebApp.gs:257:    throw avodahError_('INVALID_PUBLIC_[REDACTED]
+src/WebApp.gs:262:    throw avodahError_('INVALID_PUBLIC_[REDACTED]
+src/WebApp.gs:266:  if (!claims || claims.kind !== 'PUBLIC_BOOKING' ||
+src/WebApp.gs:269:    throw avodahError_('INVALID_PUBLIC_[REDACTED]
+src/WebApp.gs:278:    code: idempotent ? 'PUBLIC_INTAKE_REPLAY' : 'PUBLIC_INTAKE_ACCEPTED',
+src/WebApp.gs:289:function submitPublicIntake(payload) {
+src/WebApp.gs:290:  assertPublicPortalEnabled_();
+src/WebApp.gs:302:        'PUBLIC_PORTAL_RETRY');
+src/WebApp.gs:306:    assertPublicRateLimit_('INTAKE', normalized.email, 5, 3600);
+src/WebApp.gs:326:      'Form Source': 'PUBLIC_PORTAL',
+src/WebApp.gs:327:      'Source Page': 'PUBLIC_PORTAL',
+src/WebApp.gs:330:    var promotion = processIntakeSubmissionByRow_(rowNumber, 'PUBLIC_PORTAL');
+src/WebApp.gs:337:  assertPublicBookingEnabled_();
+src/WebApp.gs:342:  assertPublicBookingEnabled_();
+src/WebApp.gs:353:  }, {source: 'PUBLIC_PORTAL'});
+src/WebApp.gs:367:  assertPublicPortalEnabled_();
+src/WebApp.gs:379:  assertPublicBookingEnabled_();
+src/WebApp.gs:384:  }, {source: 'PUBLIC_PORTAL_MANAGEMENT'});
+src/WebApp.gs:388:  assertPublicBookingEnabled_();
+src/WebApp.gs:393:  }, {source: 'PUBLIC_PORTAL_MANAGEMENT'});
+src/Intake.gs:72:    generateUniqueId_('INTAKE');
+src/Intake.gs:118:      action: lead.created ? 'LEAD_CREATED_FROM_INTAKE' : 'LEAD_UPDATED_FROM_INTAKE',
+src/Intake.gs:151:        action: 'INTAKE_LEAD_PROCESS',
+src/Intake.gs:152:        entityType: 'INTAKE',
+src/Setup.gs:86:      .getProperty('ENABLE_AUTOMATION_TRIGGERS');
+src/Setup.gs:198:    result.configurationGates.push('ADVANCED_CALENDAR_SERVICE_NOT_ENABLED');
+src/Setup.gs:249:    throw avodahError_('ADVANCED_CALENDAR_SERVICE_NOT_ENABLED',
+src/Setup.gs:262:    'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+src/Setup.gs:263:    'ENABLE_RECRUITMENT_WRITES', 'ENABLE_ANALYTICS_WRITES',
+src/Setup.gs:264:    'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+src/Setup.gs:265:    'PUBLIC_PORTAL_ENABLED', 'ENABLE_AUTOMATION_TRIGGERS'
+src/Setup.gs:361:    blockers.push('[REDACTED]
+src/Setup.gs:363:  if (!gates.PUBLIC_PORTAL_ENABLED) blockers.push('PUBLIC_PORTAL_DISABLED');
+src/Setup.gs:395:    publicPortalImplementation: 'IMPLEMENTED_FEATURE_GATED',
+top_level_functions:
+WebApp.gs:renderHubTemplate_
+WebApp.gs:foundationDoGet_
+WebApp.gs:foundationPublicDoGet_
+WebApp.gs:foundationDoPostDisabled_
+WebApp.gs:include_
+WebApp.gs:foundationJsonResponse_
+WebApp.gs:getInternalFoundationStatus
+WebApp.gs:publicPortalGateStatus_
+WebApp.gs:getPublicFoundationStatus
+WebApp.gs:getPublicPortalBootstrap
+WebApp.gs:assertPublicPortalEnabled_
+WebApp.gs:assertPublicBookingEnabled_
+WebApp.gs:publicPortalText_
+WebApp.gs:normalizePublicIntakePayload_
+WebApp.gs:publicRateKey_
+WebApp.gs:assertPublicRateLimit_
+WebApp.gs:publicTokenSecret_
+WebApp.gs:publicBase64Encode_
+WebApp.gs:publicBase64Decode_
+WebApp.gs:publicHmac_
+WebApp.gs:publicConstantTimeEquals_
+WebApp.gs:issuePublicWorkflowToken_
+WebApp.gs:verifyPublicWorkflowToken_
+WebApp.gs:publicIntakeResult_
+WebApp.gs:submitPublicIntake
+WebApp.gs:getPublicBookingAvailability
+WebApp.gs:createPublicConsultationBooking
+WebApp.gs:publicManagementToken_
+WebApp.gs:getPublicManagedBooking
+WebApp.gs:reschedulePublicConsultationBooking
+WebApp.gs:cancelPublicConsultationBooking
+Intake.gs:handleSpreadsheetFormSubmit
+Intake.gs:processIntakeFormSubmit_
+Intake.gs:processIntakeRow
+Intake.gs:processPendingIntakes
+Intake.gs:processIntakeSubmissionByRow_
+Intake.gs:validateIntakeRecord_
+write_operations_performed=no
