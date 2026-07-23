@@ -1,0 +1,75 @@
+name: Diagnose TEST Web App HTTP Path
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/diagnose-test-webapp-http-path.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Probe current hardened TEST web app without writes
+        shell: bash
+        env:
+          WEBAPP_URL: https://script.google.com/macros/s/AKfycby53XUeA6NcCQt447OfYt1te6h-FOUSEIIFKM9XYoal4RYhwf0m5gRI1Ly7PnWYB9TS/exec
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+          REPORT="diagnostics/latest-test-webapp-http-path.txt"
+
+          # POST an intentionally unauthorized, non-writing request.
+          printf '%s' '{}' > /tmp/post.json
+          POST_CODE="$(curl -sS -L -o /tmp/post-body.txt -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @/tmp/post.json "$WEBAPP_URL?uat_http_probe=post" || true)"
+          POST_UNAUTHORIZED=no
+          grep -qi 'UNAUTHORIZED' /tmp/post-body.txt && POST_UNAUTHORIZED=yes || true
+          POST_INVALID_JSON=no
+          grep -qi 'INVALID_JSON' /tmp/post-body.txt && POST_INVALID_JSON=yes || true
+          POST_HTML=no
+          grep -qi '<html\|<!doctype' /tmp/post-body.txt && POST_HTML=yes || true
+
+          # GET public portal. This is read-only; classify only known disabled/enabled markers.
+          GET_CODE="$(curl -sS -L -o /tmp/get-body.txt -w '%{http_code}' "$WEBAPP_URL?view=portal&uat_http_probe=get" || true)"
+          PORTAL_DISABLED_MARKER=no
+          grep -Eqi 'PUBLIC_PORTAL_DISABLED|portal[^<]{0,40}disabled|not active|currently unavailable' /tmp/get-body.txt && PORTAL_DISABLED_MARKER=yes || true
+          PORTAL_HTML=no
+          grep -qi '<html\|<!doctype' /tmp/get-body.txt && PORTAL_HTML=yes || true
+
+          cat > "$REPORT" <<EOF
+          TEST web app HTTP-path diagnostic
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          post_http_code=${POST_CODE}
+          post_contains_unauthorized=${POST_UNAUTHORIZED}
+          post_contains_invalid_json=${POST_INVALID_JSON}
+          post_is_html=${POST_HTML}
+          portal_get_http_code=${GET_CODE}
+          portal_disabled_marker=${PORTAL_DISABLED_MARKER}
+          portal_is_html=${PORTAL_HTML}
+          write_operations_performed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-webapp-http-path.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST web app HTTP-path diagnostic" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST web app HTTP-path diagnostic" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
