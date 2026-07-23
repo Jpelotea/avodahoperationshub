@@ -1,0 +1,115 @@
+TEST UAT-03 booking contract inspection
+write_operations_performed=no
+production_touched=no
+
+## Bookings.gs
+9: function bookingActorEmail_() {
+19: function resolveBookingIdentity_(payload) {
+70: function bookingFingerprintV4_(leadId, start) {
+80: function findCurrentBookingByField_(header, value, config) {
+93: function findActiveBookingForLead_(leadId, config) {
+105: function bookingResultFromObject_(item, code) {
+123: function publicManagedBookingResult_(item, config) {
+146: function bookingManagementParts_() {
+155: function appendBookingDatabaseRecord_(details, config) {
+186: function calendarLogRecordForBooking_(details, config, status) {
+223: function formatCalendarLogBookingRow_(context, row) {
+236: function appendCalendarLogBooking_(details, config, status) {
+244: function findCalendarLogBooking_(bookingId) {
+249: function updateCalendarLogBooking_(item, details, config, status) {
+260: function updateBookingSourceLinks_(identity, details, config) {
+283: function clearBookingSourceAppointment_(record) {
+305: function auditBookingAction_(entry) {
+331: function recordBookingIssue_(entry) {
+337: function createConsultationBooking(payload) {
+342: function createConsultationBooking_(payload, options) {
+350: function createConsultationBookingCore_(payload, options) {
+471: function resolveManagedBookingV4_(payload, config) {
+479: function rescheduleConsultationBooking_(payload, options) {
+540: function cancelConsultationBooking_(payload, options) {
+582: function reconcileBookingRecords_(options) {
+716: function reconcileBookingRecordsNow() {
+
+## Calendar.gs
+3: function bookingLegacySettingsMap_() {
+15: function bookingControlledSettingsMap_() {
+23: function bookingNumberSetting_(controlled, key, fallback) {
+28: function bookingBooleanSetting_(controlled, key, fallback) {
+33: function getBookingRuntimeConfig_() {
+80: function bookingCalendarBinding_(calendarId, environment) {
+88: function assertBookingWritesEnabled_() {
+101: function validateBookingSlotRules_(startValue, config, nowValue) {
+140: function getBookingBusyIntervals_(config, windowStart, windowEnd) {
+161: function bookingCalendarConflictExists_(config, start, end, excludeEventId) {
+183: function getBookingAvailability_() {
+244: function bookingCalendarDescription_(details) {
+253: function createBookingCalendarEvent_(config, details) {
+314: function readBookingCalendarEvent_(config, eventId) {
+325: function updateBookingCalendarEventTime_(config, eventId, start, end) {
+336: function deleteBookingCalendarEvent_(config, eventId) {
+353: function bookingEventMeetLink_(event) {
+363: function bookingEventDate_(eventPart) {
+
+## WebApp.gs
+51: function publicPortalGateStatus_() {
+117: function assertPublicBookingEnabled_() {
+198: function publicTokenSecret_() {
+237: function issuePublicWorkflowToken_(intakeId, leadId, email, nowValue,
+252: function verifyPublicWorkflowToken_(token, nowValue, secretOverride) {
+336: function getPublicBookingAvailability() {
+341: function createPublicConsultationBooking(payload) {
+356: function publicManagementToken_(payload) {
+366: function getPublicManagedBooking(payload) {
+378: function reschedulePublicConsultationBooking(payload) {
+387: function cancelPublicConsultationBooking(payload) {
+
+## Security.gs
+
+## Targeted checks
+### PUBLIC_PORTAL_ENABLED
+WebApp.gs:53: var enabled = truthy_(properties.getProperty('PUBLIC_PORTAL_ENABLED'));
+
+### ENABLE_BOOKING_WORKFLOW
+Bookings.gs:590: .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+Calendar.gs:93: .getProperty('ENABLE_BOOKING_WORKFLOW') || '').trim().toUpperCase();
+Calendar.gs:96: 'Set ENABLE_BOOKING_WORKFLOW=TRUE only for an approved TEST booking run.');
+WebApp.gs:55: truthy_(properties.getProperty('ENABLE_BOOKING_WORKFLOW')) &&
+
+### ENABLE_CALENDAR_WRITES
+WebApp.gs:56: truthy_(properties.getProperty('ENABLE_CALENDAR_WRITES'));
+
+### 'Management Token Hash': ''
+Bookings.gs:566: 'Record Status': 'INACTIVE', 'Management Token Hash': ''
+
+### Manage appointment
+not_found
+
+### management_url
+Bookings.gs:466: management_url: management.url,
+
+### lead_id
+Bookings.gs:21: var leadReference = String(input.lead_id || input.leadId || '').trim();
+Bookings.gs:113: lead_id: String(record['Lead ID'] || ''),
+Bookings.gs:459: lead_id: leadId,
+Bookings.gs:532: var identity = resolveBookingIdentity_({lead_id: details.leadId, intake_id: details.intakeId});
+Bookings.gs:675: var identity = resolveBookingIdentity_({lead_id: leadId, intake_id: details.intakeId});
+WebApp.gs:243: lead_id: String(leadId || ''),
+WebApp.gs:267: !claims.intake_id || !claims.lead_id ||
+WebApp.gs:281: lead_id: String(promotion.leadId || ''),
+WebApp.gs:350: lead_id: claims.lead_id,
+
+### intake_id
+Bookings.gs:22: var intakeReference = String(input.intake_id || input.intakeId || '').trim();
+Bookings.gs:114: intake_id: String(record['Intake ID'] || ''),
+Bookings.gs:460: intake_id: intakeId,
+Bookings.gs:532: var identity = resolveBookingIdentity_({lead_id: details.leadId, intake_id: details.intakeId});
+Bookings.gs:675: var identity = resolveBookingIdentity_({lead_id: leadId, intake_id: details.intakeId});
+WebApp.gs:242: intake_id: String(intakeId || ''),
+WebApp.gs:267: !claims.intake_id || !claims.lead_id ||
+WebApp.gs:280: intake_id: String(promotion.intakeId || ''),
+WebApp.gs:349: intake_id: claims.intake_id,
+
+### event_id
+Bookings.gs:119: event_id: String(record['Google Event ID'] || '')
+Bookings.gs:465: event_id: details.eventId,
+
