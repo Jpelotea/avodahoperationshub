@@ -1,0 +1,112 @@
+name: Inspect TEST UAT-03 Booking Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat03-booking-contract.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST Apps Script source and inspect booking lifecycle
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {
+            "scriptId": "1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO",
+            "rootDir": "src",
+            "scriptExtensions": [".gs", ".js"],
+            "htmlExtensions": [".html"]
+          }
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          files = [Path('src/Bookings.gs'), Path('src/Calendar.gs'), Path('src/WebApp.gs'), Path('src/Security.gs')]
+          patterns = [
+              r'function\s+[A-Za-z0-9_]*(?:booking|Booking|calendar|Calendar|reconcile|Reconcile|reschedule|Reschedule|cancel|Cancel|manage|Manage|token|Token)[A-Za-z0-9_]*\s*\(',
+              r'function\s+(?:submitPublicBooking|getPublicManagedBooking|reschedulePublicManagedBooking|cancelPublicManagedBooking|publicPortalGateStatus_)\s*\('
+          ]
+          out = []
+          out.append('TEST UAT-03 booking contract inspection')
+          out.append('write_operations_performed=no')
+          out.append('production_touched=no')
+          out.append('')
+          for p in files:
+              if not p.exists():
+                  continue
+              lines = p.read_text(encoding='utf-8').splitlines()
+              out.append(f'## {p.name}')
+              for i, line in enumerate(lines, start=1):
+                  if any(re.search(pattern, line) for pattern in patterns):
+                      out.append(f'{i}: {line.strip()}')
+              out.append('')
+
+          # Explicitly capture gate reads, token-hash clearing, and Calendar description construction indicators.
+          checks = {
+              'PUBLIC_PORTAL_ENABLED': [],
+              'ENABLE_BOOKING_WORKFLOW': [],
+              'ENABLE_CALENDAR_WRITES': [],
+              "'Management Token Hash': ''": [],
+              'Manage appointment': [],
+              'management_url': [],
+              'lead_id': [],
+              'intake_id': [],
+              'event_id': [],
+          }
+          for p in files:
+              if not p.exists():
+                  continue
+              for i, line in enumerate(p.read_text(encoding='utf-8').splitlines(), start=1):
+                  for key in checks:
+                      if key in line:
+                          # Redact possible secret-bearing values while keeping code shape.
+                          sanitized = re.sub(r'([A-Za-z0-9_-]{30,})', '[REDACTED_LONG_TOKEN]', line.strip())
+                          checks[key].append(f'{p.name}:{i}: {sanitized}')
+          out.append('## Targeted checks')
+          for key, vals in checks.items():
+              out.append(f'### {key}')
+              out.extend(vals[:40] or ['not_found'])
+              out.append('')
+
+          Path('diagnostics/latest-test-uat03-booking-contract.txt').write_text('\n'.join(out) + '\n', encoding='utf-8')
+          PY
+
+      - name: Publish sanitized diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-booking-contract.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 booking contract inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch "main" '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 booking contract inspection" --arg content "$CONTENT_B64" --arg branch "main" '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
