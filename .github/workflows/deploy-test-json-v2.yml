@@ -85,7 +85,18 @@ jobs:
 
       - name: Push hardened TEST source
         id: push_source
-        run: clasp push --force
+        shell: bash
+        run: |
+          set +e
+          clasp push --force > /tmp/clasp-push.log 2>&1
+          CODE=$?
+          if [ $CODE -ne 0 ]; then
+            tail -40 /tmp/clasp-push.log \
+              | sed -E 's/(token|secret|password|refresh_token|access_token)[^ ]*/[REDACTED]/Ig' \
+              | sed -E 's/[A-Za-z0-9_\.-]{80,}/[LONG_VALUE_REDACTED]/g' \
+              > /tmp/clasp-push-sanitized.log
+          fi
+          exit $CODE
 
       - name: Create Apps Script version
         id: version
@@ -142,6 +153,10 @@ jobs:
           redeploy=${REDEPLOY_OUTCOME}
           apps_script_version=${VERSION}
           EOF
+          if [ -s /tmp/clasp-push-sanitized.log ]; then
+            echo "push_error:" >> "$REPORT"
+            cat /tmp/clasp-push-sanitized.log >> "$REPORT"
+          fi
           CONTENT_B64="$(base64 -w 0 "$REPORT")"
           CURRENT_SHA="$(curl -fsSL \
             -H "Authorization: Bearer $GH_TOKEN" \
