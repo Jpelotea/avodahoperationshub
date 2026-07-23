@@ -1,0 +1,1 @@
+Trigger read-only TEST web app HTTP-path diagnostic after UAT-02 endpoint propagation failures.
