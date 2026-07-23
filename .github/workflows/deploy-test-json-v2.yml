@@ -2,11 +2,6 @@ name: Deploy TEST v1.1.1 JSON V2
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/deploy-test-json-v2.trigger'
 
 permissions:
   contents: write
