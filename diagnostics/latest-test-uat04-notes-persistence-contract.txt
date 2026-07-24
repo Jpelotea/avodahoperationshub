@@ -1,0 +1,345 @@
+TEST UAT-04 Notes persistence contract inspection
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+
+## Config Project 1 schema excerpt
+     'Booking ID', 'Lead ID', 'Intake ID', 'Management Token Hash',
+        'Google Event ID', 'Status', 'Start', 'End', 'Meet Link',
+        'Idempotency Key', 'Fingerprint', 'Client Name', 'Client Email',
+        'Normalized Email', 'Client Phone', 'Normalized Phone',
+        'Cancellation Reason', 'Created At', 'Updated At', 'Last Reconciled',
+        'Reconciliation Status', 'Last Error', 'Calendar Binding',
+        'Environment', 'Record Status', 'Source Version'
+      ]
+    },
+    {
+      name: 'Project 1 Activity Database',
+      mode: 'TABLE',
+      headers: [
+        'Activity ID', 'Submission Timestamp', 'Activity Date', 'Agent Code',
+        'Team Member', 'Activity Type', 'Sub-Activity', 'Points',
+        'Required Data JSON', 'Proof URL', 'Duplicate Fingerprint',
+        'Duplicate Status', 'Status Summary', 'Reporting Week',
+        'Reporting Month', 'Record Status', 'Created By', 'Created At',
+        'Updated At'
+      ]
+    },
+    {name: 'Activity Log', mode: 'PRESERVE'},
+    {
+      name: 'Activity Audit Log',
+      mode: 'TABLE',
+      headers: [
+        'Log ID', 'Occurred At', 'Actor Email', 'Actor Role', 'Action',
+        'Entity Type', 'Entity ID', 'Result', 'Details JSON', 'Request ID'
+      ]
+    },
+    {
+      name: 'Automation Log',
+      mode: 'TABLE',
+      headers: [
+        'Automation Log ID', 'Started At', 'Finished At', 'Handler',
+        'Trigger UID', 'Environment', 'Status', 'Records Read',
+        'Records Written', 'Error Code', 'Error Message', 'Details JSON'
+      ]
+    },
+    {name: 'Daily Report', mode: 'PRESERVE_OR_DERIVED'},
+    {name: 'Weekly Report', mode: 'PRESERVE_OR_DERIVED'},
+    {
+      name: 'Monthly Reports',
+      mode: 'DERIVED',
+      headers: ['Snapshot Month', 'Metric', 'Dimension', 'Value', 'Generated At']
+    },
+    {
+      name: 'Lead Analytics',
+      mode: 'DERIVED',
+      headers: ['Metric', 'Dimension', 'Value', 'As Of']
+    },
+    {
+      name: 'Recruitment Analytics',
+      mode: 'DERIVED',
+      headers: ['Metric', 'Dimension', 'Value', 'As Of']
+    },
+    {
+      name: 'Calendar and Booking Analytics',
+      mode: 'DERIVED',
+   
+
+## Project 1 append object excerpt
+truthy_(payload && payload.confirm_duplicate)) {
+      return {
+        ok: false,
+        code: 'DUPLICATE_CONFIRMATION_REQUIRED',
+        message: 'A matching Project 1 activity already exists.',
+        existing_activity_id: duplicate.record['Activity ID'] || '',
+        duplicate_status: 'POSSIBLE_DUPLICATE'
+      };
+    }
+
+    var now = new Date();
+    var activityId = generateUniqueId_('PROJECT1');
+    var duplicateStatus = duplicate ? 'CONFIRMED_DUPLICATE' : 'UNIQUE';
+    var rowNumber = appendObjectRow_('Project 1 Activity Database', {
+      'Activity ID': activityId,
+      'Submission Timestamp': now,
+      'Activity Date': validated.activityDate,
+      'Agent Code': validated.agentCode,
+      'Team Member': validated.teamMember,
+      'Activity Type': mapping.activityType,
+      'Sub-Activity': mapping.subActivity,
+      'Points': mapping.points,
+      'Required Data JSON': safeJsonStringify_(validated.requiredData),
+      'Proof URL': validated.proofUrl,
+      'Duplicate Fingerprint': fingerprint,
+      'Duplicate Status': duplicateStatus,
+      'Status Summary': project1StatusSummary_(mapping, validated.requiredData),
+      'Reporting Week': project1ReportingWeek_(validated.activityDate),
+      'Reporting Month': project1ReportingMonth_(validated.activityDate),
+      'Record Status': 'ACTIVE',
+      'Created By': user.email || '',
+      'Created At': now,
+      'Updated At': now
+    });
+    formatProject1ActivityRow_(rowNumber);
+    SpreadsheetApp.flush();
+    var auditWritten = project1AuditSafe_({
+      actorEmail: user.email || '',
+      actorRole: user.role || '',
+      action: 'PROJECT1_ACTIVITY_SUBMITTED',
+      entityType: 'PROJECT1_ACTIVITY',
+      entityId: activityId,
+      result: 'SUCCESS',
+      requestId: settings.requestId || '',
+      details: {
+        activityType: mapping.activityType,
+        subActivity: mapping.subActivity,
+        points: mapping.points,
+        duplicateStatus: duplicateStatus,
+        source: settings.source || ''
+      }
+    });
+    return {
+      ok: true,
+      code: duplicate ? 'PROJECT1_CONFIRMED_DUPLICATE_CREATED' :
+        'PROJECT1_ACTIVITY_CREATED',
+      activity_id: activityId,
+      row_number: rowNumber,
+      points: mapping.points,
+      reporting_week: project1ReportingWeek_(validated.activityDate),
+      reporting_month: project1ReportingMonth_(validated.activityDate),
+      duplicate_status: duplicateStatus,
+      audit_written: auditWritten
+    };
+  });
+}
+
+function getProject1FormDefinition() {
+  var user = requireUserRole_(['ADMIN', 'MANAGER', 'STAFF']);
+  var activities = [];
+  getProject1PointMapping_().forEach(function(mapping) {
+    var activity = activities.filter(function(item) {
+      return item.activityType === mapp
+
+## Project 1 payload/validation excerpts
+function validateProject1Submission_(payload) {
+  var input = payload || {};
+  var activityDate = project1Date_(input.activity_date, 'Activity Date');
+  var agentCode = String(input.agent_code || '').trim();
+  var teamMember = String(input.team_member || '').trim();
+  if (!agentCode) throw avodahError_('AGENT_CODE_REQUIRED', 'Agent Code is required.');
+  if (!teamMember) throw avodahError_('TEAM_MEMBER_REQUIRED', 'Team Member is required.');
+  var teamOptions = project1TeamMemberOptions_();
+  if (teamOptions.length && teamOptions.map(function(value) {
+    return value.toLowerCase();
+  }).indexOf(teamMember.toLowerCase()) === -1) {
+    throw avodahError_('TEAM_MEMBER_NOT_CONFIGURED',
+      'Team Member must match an active TEAM_MEMBER setting.');
+  }
+  var mapping = findProject1Mapping_(input.activity_type, input.sub_activity);
+  if (!mapping) {
+    throw avodahError_('PROJECT1_MAPPING_NOT_FOUND',
+      'Activity Type and Sub-Activity must match one active controlled mapping.');
+  }
+  var required = project1RequiredData_(mapping, input);
+  return {
+    activityDate: activityDate,
+    agentCode: agentCode,
+    teamMember: teamMember,
+    mapping: mapping,
+    requiredData: required.data,
+    proofUrl: required.proofUrl,
+    notes: String(input.notes || '').trim()
+  };
+}
+
+function project1AuditSafe_(event) {
+  try {
+    logAuditEvent_(event);
+    return true;
+  } catch (error) {
+    logAutomationSafe_({
+      handler: 'project1AuditSafe_',
+      status: 'WARNING',
+      errorCode: error.code || 'AUDIT_WRITE_FAILED',
+      errorMessage: String(error.message || error),
+      details: {entityId: event.entityId || ''}
+    });
+    return false;
+  }
+}
+
+function formatProject1ActivityRow_(rowNumber) {
+  var context = getTableContext_('Project 1 Activity Database');
+  var activityDateColumn = context.headerMap[normalizeHeader_('Activity Date')];
+  if (activityDateColumn) {
+    context.sheet.getRange(rowNumber, activityDateColumn).setNumberFormat('yyyy-mm-dd');
+  }
+}
+
+function submitProject1Activity(payload) {
+  var user = requireUserRole_(['ADMIN', 'MANAGER', 'STAFF']);
+  return submitProject1Activity_(payload, {
+    user: user,
+    source: 'INTERNAL_HUB',
+    requestId: Utilities.getUuid()
+  });
+}
+
+function
+
+## Candidate schema synchronization lines
+Analytics.gs:294: function analyticsSourceRecords_(logicalName, idHeaders) {
+Analytics.gs:298: return (idHeaders || []).some(function(header) {
+Analytics.gs:506: var columns = Number(width || context.headers.length);
+Analytics.gs:516: ensureDerivedSheetWarning_(sheet, 'AVODAH_DERIVED_' + logicalName);
+Analytics.gs:552: ensureDerivedSheetWarning_(sheet, 'AVODAH_DERIVED_MONTHLY_REPORTS');
+Analytics.gs:579: function ensureDerivedSheetWarning_(sheet, description) {
+Analytics.gs:634: function analyticsValue_(record, headers) {
+Analytics.gs:636: for (var i = 0; i < (headers || []).length; i += 1) {
+Analytics.gs:637: var wanted = normalizeHeader_(headers[i]);
+Analytics.gs:670: function analyticsCountPresent_(rows, headers) {
+Analytics.gs:672: return analyticsText_(analyticsValue_(record, headers)) !== '';
+Analytics.gs:676: function analyticsCountMatching_(rows, headers, allowed) {
+Analytics.gs:679: return wanted.indexOf(analyticsKey_(analyticsValue_(record, headers))) !== -1;
+Analytics.gs:683: function analyticsCountBy_(rows, headers, blankLabel) {
+Analytics.gs:686: var label = analyticsText_(analyticsValue_(record, headers)) || blankLabel || 'Unspecified';
+Analytics.gs:692: function analyticsSumBy_(rows, groupHeaders, valueHeaders, blankLabel) {
+Analytics.gs:695: var label = analyticsText_(analyticsValue_(record, groupHeaders)) ||
+Analytics.gs:698: analyticsNumber_(analyticsValue_(record, valueHeaders));
+Analytics.gs:711: function analyticsSum_(rows, headers) {
+Analytics.gs:713: return total + analyticsNumber_(analyticsValue_(record, headers));
+Bookings.gs:606: var synchronized = 0;
+Bookings.gs:699: synchronized += 1;
+Bookings.gs:704: details: {synchronized: synchronized, repairedLog: repairedLog,
+Bookings.gs:711: recordsWritten: synchronized + repairedLog,
+Bookings.gs:712: synchronized: synchronized,
+Code.gs:381: ensureProductionSupportSheets_(spreadsheet);
+Code.gs:705: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:718: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:747: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:1084: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:1101: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:1120: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:1201: ensureProductionSupportSheets_(ss);
+Code.gs:1214: ensureProductionSupportSheets_(ss);
+Code.gs:1250: ensureProductionSupportSheets_(ss);
+Code.gs:1543: headers: { Authorization: "Bearer " + ScriptApp.getOAuthToken() },
+Code.gs:1632: ensureProductionSupportSheets_(ss);
+Code.gs:1643: let synchronized = 0;
+Code.gs:1746: synchronized += 1;
+Code.gs:1778: newValue: JSON.stringify({ synchronized: synchronized, repairedLog: repairedLog, repairedLead: repairedLead })
+Code.gs:1788: synchronized: synchronized,
+Code.gs:1798: ensureProductionSupportSheets_(ss);
+Code.gs:1900: function ensureProductionSupportSheets_(ss) {
+Code.gs:1951: ensureProductionSupportSheets_(ss);
+Code.gs:2741: * Keeps the monthly rich-text view synchronized after manual Calendar Log edits
+Code.gs:2820: ensureProductionSupportSheets_(ss);
+Code.gs:2927: ensureProductionSupportSheets_(ss);
+Config.gs:13: SETTINGS_HEADERS: [
+Config.gs:55: headers: [
+Config.gs:75: headers: [
+Config.gs:89: headers: [
+Config.gs:102: headers: [
+Config.gs:111: headers: [
+Config.gs:124: headers: [
+Config.gs:133: headers: [
+Config.gs:141: headers: [
+Config.gs:154: headers: [
+Config.gs:167: headers: [
+Config.gs:180: headers: [
+Config.gs:188: headers: [
+Config.gs:199: headers: ['Snapshot Month', 'Metric', 'Dimension', 'Value', 'Generated At']
+Config.gs:204: headers: ['Metric', 'Dimension', 'Value', 'As Of']
+Config.gs:209: headers: ['Metric', 'Dimension', 'Value', 'As Of']
+Config.gs:214: headers: ['Metric', 'Dimension', 'Value', 'As Of']
+Config.gs:219: headers: ['Metric', 'Dimension', 'Value', 'As Of']
+Config.gs:224: headers: ['Report Key', 'Report Name', 'Period', 'Status', 'Last Refreshed']
+Config.gs:230: headers: [
+Dashboard.gs:26: ensureDashboardWarning_(sheet);
+Dashboard.gs:153: function ensureDashboardWarning_(sheet) {
+Database.gs:1: /** Spreadsheet access and non-destructive schema normalization. */
+Database.gs:37: function ensureSheetForDefinition_(spreadsheet, definition) {
+Database.gs:44: function ensureColumnCapacity_(sheet, requiredColumns) {
+Database.gs:62: function appendMissingHeaders_(sheet, requiredHeaders, headerRow) {
+Database.gs:66: var missing = requiredHeaders.filter(function(header) {
+Database.gs:72: ensureColumnCapacity_(sheet, startColumn + missing.length - 1);
+Database.gs:78: var headers = definition.headers || [];
+Database.gs:79: if (!headers.length) return [];
+Database.gs:81: ensureColumnCapacity_(sheet, headers.length);
+Database.gs:82: sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+Database.gs:84: return headers.slice();
+Database.gs:86: return appendMissingHeaders_(sheet, headers, 1);
+Database.gs:98: var headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+Database.gs:103: var row = headers.map(function(header) {
+Database.gs:122: throw avodahError_('MISSING_HEADERS', logicalSheetName + ' has no headers.');
+Database.gs:124: var headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+Database.gs:129: headers: headers,
+Database.gs:134: function objectFromRowValues_(headers, values) {
+Database.gs:136: headers.forEach(function(header, index) {
+Database.gs:149: var values = context.sheet.getRange(row, 1, 1, context.headers.length)
+Database.gs:155: record: objectFromRowValues_(context.headers, values)
+Database.gs:163: var values = context.sheet.getRange(2, 1, lastRow - 1, context.headers.length)
+Database.gs:168: record: objectFromRowValues_(context.headers, row)
+Database.gs:234: var headers = AVODAH_CONFIG.SETTINGS_HEADERS;
+Database.gs:236: if (scanWidth < headers.length) return null;
+Database.gs:238: for (var column = 1; column <= scanWidth - headers.length + 1; column += 1) {
+Database.gs:248: function ensureSettingsTable_(sheet) {
+Database.gs:251: var headers = AVODAH_CONFIG.SETTINGS_HEADERS;
+Database.gs:256: ensureColumnCapacity_(sheet, startColumn + headers.length - 1);
+Database.gs:257: sheet.getRange(1, startColumn, 1, headers.length).setValues([headers]);
+Database.gs:268: if (createIfMissing === true) return ensureSettingsTable_(sheet);
+Database.gs:279: lastRow - table.headerRow, AVODAH_CONFIG.SETTINGS_HEADERS.length).getValues();
+FoundationTests.gs:296: logContext.headers.length - 1).clearContent();
+FoundationTests.gs:353: var missingHeaders = [];
+FoundationTests.gs:356: missingHeaders = (definition.headers || []).filter(function(header) {
+FoundationTests.gs:364: missingHeaders: missingHeaders
+FoundationTests.gs:671: logContext.headers.length - 1).clearContent();
+Recruitment.gs:3: var RECRUITMENT_SCORE_HEADERS = Object.freeze([
+Recruitment.gs:445: RECRUITMENT_SCORE_HEADERS.forEach(function(pair) {
+ScheduleImport.gs:54: function scheduleImportRequiredHeaders_() {
+ScheduleImport.gs:55: return getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET).headers.slice();
+ScheduleImport.gs:58: function scheduleImportAssertHeaders_(context, requiredHeaders) {
+ScheduleImport.gs:59: (requiredHeaders || []).forEach(function(header) {
+ScheduleImport.gs:240: function scheduleImportEnsureRowCapacity_(sheet, requiredLastRow) {
+ScheduleImport.gs:283: scheduleImportAssertHeaders_(previewContext, scheduleImportRequiredHeaders_());
+ScheduleImport.gs:284: scheduleImportAssertHeaders_(calendarContext,
+ScheduleImport.gs:285: getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).headers);
+ScheduleImport.gs:298: scheduleImportEnsureRowCapacity_(previewSheet, built.rows.length + 1);
+ScheduleImport.gs:381: var keyHeaders = ['Event ID', 'Owner', 'Calendar Log ID', 'Idempotency Key'];
+ScheduleImport.gs:382: var columns = keyHeaders.map(function(header) {
+ScheduleImport.gs:397: scheduleImportEnsureRowCapacity_(sheet, next);
+ScheduleImport.gs:418: calendarContext.headers.length).clearContent();
+ScheduleImport.gs:436: scheduleImportAssertHeaders_(previewContext, scheduleImportRequiredHeaders_());
+ScheduleImport.gs:437: scheduleImportAssertHeaders_(calendarContext,
+ScheduleImport.gs:438: getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).headers);
+ScheduleImport.gs:661: scheduleImportEnsureRowCapacity_(previewContext.sheet, fixtureRow);
+ScheduleImport.gs:702: calendarContext.headers.length).clearContent();
+Setup.gs:62: appendedHeaders: {},
+Setup.gs:70: var resolved = ensureSheetForDefinition_(spreadsheet, definition);
+Setup.gs:76: if (appended.length) report.appendedHeaders[resolved.sheet.getName()] = appended;
+Setup.gs:78: ensureSettingsTable_(resolved.sheet);
+Validation.gs:62: function ensureDateTimeValidationForColumn_(logicalSheetName, headerName) {
+Validation.gs:63: var result = ensureDateValidationForColumn_(logicalSheetName, headerName);
+Validation.gs:75: function ensureNumberRangeValidationForColumn_(logicalSheetName, headerName, min, max) {
+Validation.gs:95: function ensureDateValidationForColumn_(logicalSheetName, headerName) {
+Validation.gs:127: function ensureListValidationForColumn_(logicalSheetName, headerName, values) {
