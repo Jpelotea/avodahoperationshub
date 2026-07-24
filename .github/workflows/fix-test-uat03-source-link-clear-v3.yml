@@ -1,0 +1,152 @@
+name: Fix TEST UAT-03 Source Link Clear V3
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/fix-test-uat03-source-link-clear-v3.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Patch and verify live TEST source
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/Bookings.gs';
+          let text = fs.readFileSync(path, 'utf8');
+          const oldIntake = "    updateObjectRow_('Intake Submissions', intake.rowNumber, {\n      'Follow-up Status': 'New',\n      'Appointment Date': '',\n      'Last Processed At': new Date()\n    });";
+          const newIntake = "    updateObjectRow_('Intake Submissions', intake.rowNumber, {\n      'Follow-up Status': 'New',\n      'Appointment Date': '',\n      'Booking ID': '',\n      'Calendar Event ID': '',\n      'Last Processed At': new Date()\n    });";
+          const oldLead = "    updateObjectRow_('Lead Database', lead.rowNumber, {\n      'Follow-up Status': 'New',\n      'Appointment Date': '',\n      'Updated At': new Date(),\n      'Updated By': bookingActorEmail_()\n    });";
+          const newLead = "    updateObjectRow_('Lead Database', lead.rowNumber, {\n      'Follow-up Status': 'New',\n      'Appointment Date': '',\n      'Booking ID': '',\n      'Calendar Event ID': '',\n      'Updated At': new Date(),\n      'Updated By': bookingActorEmail_()\n    });";
+          let changed = false;
+          if (!text.includes(newIntake)) {
+            if (!text.includes(oldIntake)) throw new Error('Expected Intake cleanup block not found.');
+            text = text.replace(oldIntake, newIntake);
+            changed = true;
+          }
+          if (!text.includes(newLead)) {
+            if (!text.includes(oldLead)) throw new Error('Expected Lead cleanup block not found.');
+            text = text.replace(oldLead, newLead);
+            changed = true;
+          }
+          fs.writeFileSync(path, text);
+          fs.writeFileSync('/tmp/patch-state.txt', changed ? 'changed' : 'already_patched');
+          function functionBody(source, name) {
+            const start = source.search(new RegExp('function\\s+' + name + '\\s*\\([^)]*\\)\\s*\\{'));
+            if (start < 0) throw new Error('Target function not found.');
+            const open = source.indexOf('{', start);
+            let depth = 0, s = false, d = false, t = false, esc = false;
+            for (let i = open; i < source.length; i++) {
+              const c = source[i];
+              if (esc) esc = false;
+              else if (c === '\\') esc = true;
+              else if (!d && !t && c === "'") s = !s;
+              else if (!s && !t && c === '"') d = !d;
+              else if (!s && !d && c === '`') t = !t;
+              else if (!s && !d && !t) {
+                if (c === '{') depth++;
+                else if (c === '}' && --depth === 0) return source.slice(start, i + 1);
+              }
+            }
+            throw new Error('Target function unterminated.');
+          }
+          const body = functionBody(text, 'clearBookingSourceAppointment_');
+          if ((body.match(/'Booking ID': ''/g) || []).length !== 2) throw new Error('Booking ID clear count mismatch.');
+          if ((body.match(/'Calendar Event ID': ''/g) || []).length !== 2) throw new Error('Calendar Event ID clear count mismatch.');
+          NODE
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          node <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('verify-src/Bookings.gs', 'utf8');
+          const start = text.search(/function\s+clearBookingSourceAppointment_\s*\([^)]*\)\s*\{/);
+          if (start < 0) throw new Error('Pulled-back target function not found.');
+          const open = text.indexOf('{', start);
+          let depth = 0, s = false, d = false, t = false, esc = false, body = '';
+          for (let i = open; i < text.length; i++) {
+            const c = text[i];
+            if (esc) esc = false;
+            else if (c === '\\') esc = true;
+            else if (!d && !t && c === "'") s = !s;
+            else if (!s && !t && c === '"') d = !d;
+            else if (!s && !d && c === '`') t = !t;
+            else if (!s && !d && !t) {
+              if (c === '{') depth++;
+              else if (c === '}' && --depth === 0) { body = text.slice(start, i + 1); break; }
+            }
+          }
+          if (!body) throw new Error('Pulled-back target function unterminated.');
+          if ((body.match(/'Booking ID': ''/g) || []).length !== 2) throw new Error('Pulled-back Booking ID clear count mismatch.');
+          if ((body.match(/'Calendar Event ID': ''/g) || []).length !== 2) throw new Error('Pulled-back Calendar Event ID clear count mismatch.');
+          NODE
+          PATCH_STATE="$(cat /tmp/patch-state.txt)"
+          cat > diagnostics/latest-test-uat03-source-link-clear-fix-v3.txt <<EOF
+          TEST UAT-03 source-link clear fix V3
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          patch_state=${PATCH_STATE}
+          live_source_push=success
+          live_pullback_verification=success
+          intake_booking_id_clear=present
+          intake_calendar_event_id_clear=present
+          lead_booking_id_clear=present
+          lead_calendar_event_id_clear=present
+          deployment_changed=no
+          script_properties_changed=no
+          spreadsheet_changed=no
+          calendar_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-source-link-clear-fix-v3.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 source-link clear fix V3" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 source-link clear fix V3" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
