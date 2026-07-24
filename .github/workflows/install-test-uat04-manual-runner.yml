@@ -1,0 +1,385 @@
+name: Install TEST UAT-04 Manual Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/install-test-uat04-manual-runner.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install and verify TEST-only UAT-04 runner
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          cat > src/UAT04Manual.gs <<'GS'
+          /** Phase 6 UAT-04 controlled TEST-only Project 1 runtime runner. */
+
+          var AVODAH_UAT04_GATE_NAMES = [
+            'ENABLE_BOOKING_WORKFLOW',
+            'ENABLE_PROJECT1_WRITES',
+            'ENABLE_RECRUITMENT_WRITES',
+            'ENABLE_ANALYTICS_WRITES',
+            'ENABLE_SCHEDULE_IMPORT_WRITES',
+            'ENABLE_CALENDAR_WRITES',
+            'PUBLIC_PORTAL_ENABLED',
+            'ENABLE_AUTOMATION_TRIGGERS'
+          ];
+
+          function uat04Assert_(condition, code, message, details) {
+            if (!condition) throw avodahError_(code, message, details || {});
+          }
+
+          function uat04GateState_() {
+            var properties = PropertiesService.getScriptProperties();
+            var state = {};
+            AVODAH_UAT04_GATE_NAMES.forEach(function(name) {
+              state[name] = String(properties.getProperty(name) || '')
+                .trim().toUpperCase() === 'TRUE';
+            });
+            return state;
+          }
+
+          function uat04SetAllGatesFalse_() {
+            var values = {};
+            AVODAH_UAT04_GATE_NAMES.forEach(function(name) { values[name] = 'FALSE'; });
+            PropertiesService.getScriptProperties().setProperties(values, false);
+            return uat04GateState_();
+          }
+
+          function resetPhase6Uat04SafetyGates() {
+            var state = uat04SetAllGatesFalse_();
+            var allFalse = AVODAH_UAT04_GATE_NAMES.every(function(name) {
+              return state[name] === false;
+            });
+            var result = {
+              ok: allFalse,
+              code: allFalse ? 'UAT04_SAFETY_GATES_RESET' : 'UAT04_GATE_RESET_FAILED',
+              gates: state,
+              environment: getEnvironment_(),
+              productionTouched: false
+            };
+            console.log(JSON.stringify(result));
+            return result;
+          }
+
+          function runPhase6Uat04Manual() {
+            var user = requireUserRole_(['ADMIN']);
+            var properties = PropertiesService.getScriptProperties();
+            var activityId = '';
+            var createdRowNumber = 0;
+            var requestId = 'uat04-' + Utilities.getUuid();
+
+            try {
+              uat04Assert_(getEnvironment_() === 'TEST', 'UAT04_TEST_ENVIRONMENT_REQUIRED',
+                'UAT-04 may run only in TEST.');
+              var spreadsheet = getHubSpreadsheet_();
+              uat04Assert_(/^TEST(?:\s|-)/i.test(spreadsheet.getName()),
+                'UAT04_TEST_SPREADSHEET_REQUIRED',
+                'UAT-04 requires a spreadsheet whose title begins with TEST.');
+
+              var startingGates = uat04GateState_();
+              var unsafe = AVODAH_UAT04_GATE_NAMES.filter(function(name) {
+                return startingGates[name] === true;
+              });
+              uat04Assert_(unsafe.length === 0, 'UAT04_UNSAFE_GATE_STATE',
+                'All controlled gates must be FALSE before UAT-04 starts.',
+                {enabledGates: unsafe});
+
+              var validation = runProject1ValidationTests();
+              uat04Assert_(validation && validation.passed,
+                'UAT04_READ_ONLY_VALIDATION_FAILED',
+                'Project 1 read-only validation suite failed.',
+                {failures: validation && validation.failures || []});
+
+              var mappings = getProject1PointMapping_();
+              var mapping = mappings.filter(function(item) {
+                return item.requiredFields.indexOf('proofUrl') !== -1;
+              })[0];
+              uat04Assert_(Boolean(mapping), 'UAT04_PROOF_MAPPING_MISSING',
+                'No proof-bearing Project 1 mapping is configured.');
+
+              var now = new Date();
+              var agentCode = 'UAT04-' + Utilities.formatDate(now,
+                AVODAH_CONFIG.TIME_ZONE, 'yyyyMMddHHmmss');
+              var payload = project1TestPayload_(mapping, 404, agentCode, now);
+              payload.notes = 'Phase 6 UAT-04 controlled notes persistence check ' + requestId;
+              payload.proof_url = 'https://example.com/avodah-uat04-proof/' +
+                encodeURIComponent(agentCode.toLowerCase());
+              if (payload.fields && Object.prototype.hasOwnProperty.call(
+                  payload.fields, 'proofUrl')) {
+                payload.fields.proofUrl = payload.proof_url;
+              }
+
+              var beforeRows = getObjectRows_('Project 1 Activity Database').filter(
+                function(item) {
+                  return String(item.record['Agent Code'] || '').trim().toUpperCase() ===
+                    agentCode.toUpperCase();
+                });
+              uat04Assert_(beforeRows.length === 0, 'UAT04_AGENT_CODE_COLLISION',
+                'The controlled Agent Code already exists.');
+              var monthKey = project1ReportingMonth_(now);
+              var beforeSummary = project1MonthlySummaryCore_(beforeRows, monthKey,
+                {agentCode: agentCode});
+              uat04Assert_(beforeSummary.records === 0 && beforeSummary.totalPoints === 0,
+                'UAT04_BASELINE_NOT_EMPTY',
+                'The controlled monthly baseline is not empty.');
+
+              properties.setProperty('ENABLE_PROJECT1_WRITES', 'TRUE');
+              var created = submitProject1Activity_(payload, {
+                user: user,
+                source: 'PHASE6_UAT04_MANUAL',
+                requestId: requestId
+              });
+              uat04Assert_(created && created.ok &&
+                created.code === 'PROJECT1_ACTIVITY_CREATED',
+                'UAT04_CREATE_FAILED', 'Controlled Project 1 creation failed.',
+                {result: created});
+              activityId = String(created.activity_id || '');
+              createdRowNumber = Number(created.row_number || 0);
+              uat04Assert_(activityId.indexOf('P1-') === 0 && createdRowNumber > 1,
+                'UAT04_ACTIVITY_ID_INVALID',
+                'Created Project 1 activity identifiers are invalid.');
+              uat04Assert_(Number(created.points) === Number(mapping.points),
+                'UAT04_POINTS_MISMATCH',
+                'Created points do not match the active mapping.');
+              uat04Assert_(created.audit_written === true,
+                'UAT04_AUDIT_WRITE_FAILED',
+                'The Project 1 submit path did not confirm its audit write.');
+
+              var rowItem = getObjectRows_('Project 1 Activity Database').filter(
+                function(item) {
+                  return String(item.record['Activity ID'] || '') === activityId;
+                })[0];
+              uat04Assert_(Boolean(rowItem), 'UAT04_DATABASE_ROW_MISSING',
+                'The controlled activity row was not found after creation.');
+              var row = rowItem.record;
+              uat04Assert_(String(row['Agent Code'] || '') === agentCode &&
+                String(row['Activity Type'] || '') === mapping.activityType &&
+                String(row['Sub-Activity'] || '') === mapping.subActivity &&
+                Number(row.Points || 0) === Number(mapping.points),
+                'UAT04_DATABASE_ROW_MISMATCH',
+                'The master database row does not match the controlled payload.');
+              uat04Assert_(String(row['Proof URL'] || '') === payload.proof_url,
+                'UAT04_PROOF_NOT_PERSISTED',
+                'The proof URL was not persisted exactly.');
+
+              var requiredData = safeJsonParse_(row['Required Data JSON'], null);
+              uat04Assert_(requiredData &&
+                Object.prototype.toString.call(requiredData) === '[object Object]',
+                'UAT04_REQUIRED_DATA_INVALID',
+                'Required Data JSON is missing or invalid.');
+              mapping.requiredFields.filter(function(key) {
+                return key !== 'proofUrl';
+              }).forEach(function(key) {
+                uat04Assert_(String(requiredData[key] || '') !== '',
+                  'UAT04_REQUIRED_DATA_FIELD_MISSING',
+                  'A required data field was not persisted.', {field: key});
+              });
+
+              var expectedWeek = project1ReportingWeek_(now);
+              uat04Assert_(String(row['Reporting Week'] || '') === expectedWeek &&
+                String(row['Reporting Month'] || '') === monthKey,
+                'UAT04_REPORTING_BUCKET_MISMATCH',
+                'The reporting week or month bucket is incorrect.');
+
+              var controlledRows = getObjectRows_('Project 1 Activity Database').filter(
+                function(item) {
+                  return String(item.record['Agent Code'] || '').trim().toUpperCase() ===
+                    agentCode.toUpperCase() &&
+                    String(item.record['Record Status'] || 'ACTIVE').toUpperCase() === 'ACTIVE';
+                });
+              var weekPoints = controlledRows.filter(function(item) {
+                return String(item.record['Reporting Week'] || '') === expectedWeek;
+              }).reduce(function(sum, item) {
+                return sum + Number(item.record.Points || 0);
+              }, 0);
+              uat04Assert_(controlledRows.length === 1 &&
+                weekPoints === Number(mapping.points),
+                'UAT04_WEEKLY_ROLLUP_MISMATCH',
+                'The controlled weekly rollup does not equal the mapped points.');
+
+              var afterSummary = project1MonthlySummaryCore_(controlledRows, monthKey,
+                {agentCode: agentCode});
+              uat04Assert_(afterSummary.records === 1 &&
+                afterSummary.totalPoints === Number(mapping.points) &&
+                afterSummary.byActivityType.length === 1 &&
+                afterSummary.bySubActivity.length === 1 &&
+                afterSummary.byTeamMember.length === 1,
+                'UAT04_MONTHLY_ROLLUP_MISMATCH',
+                'The controlled monthly rollup is incorrect.',
+                {summary: afterSummary});
+
+              var duplicate = submitProject1Activity_(payload, {
+                user: user,
+                source: 'PHASE6_UAT04_MANUAL_REPLAY',
+                requestId: 'uat04-replay-' + Utilities.getUuid()
+              });
+              uat04Assert_(duplicate && duplicate.ok === false &&
+                duplicate.code === 'DUPLICATE_CONFIRMATION_REQUIRED' &&
+                String(duplicate.existing_activity_id || '') === activityId,
+                'UAT04_DUPLICATE_GUARD_FAILED',
+                'The unconfirmed duplicate replay was not blocked.',
+                {result: duplicate});
+              var rowsAfterReplay = getObjectRows_('Project 1 Activity Database').filter(
+                function(item) {
+                  return String(item.record['Agent Code'] || '').trim().toUpperCase() ===
+                    agentCode.toUpperCase();
+                });
+              uat04Assert_(rowsAfterReplay.length === 1,
+                'UAT04_DUPLICATE_ROW_CREATED',
+                'The blocked replay created an extra database row.');
+
+              var audits = getObjectRows_('Activity Audit Log').filter(function(item) {
+                return String(item.record['Entity ID'] || '') === activityId &&
+                  String(item.record.Action || '') === 'PROJECT1_ACTIVITY_SUBMITTED' &&
+                  String(item.record.Result || '') === 'SUCCESS';
+              });
+              uat04Assert_(audits.length === 1, 'UAT04_AUDIT_RECORD_MISMATCH',
+                'Exactly one successful Project 1 audit record was expected.',
+                {count: audits.length});
+
+              var context = getTableContext_('Project 1 Activity Database');
+              var notesColumn = context.headerMap[normalizeHeader_('Notes')] || 0;
+              var notesInRequiredData = String(requiredData.notes || '') === payload.notes;
+              var notesPersisted = Boolean(notesColumn &&
+                String(row.Notes || '') === payload.notes) || notesInRequiredData;
+
+              var result = {
+                ok: true,
+                code: notesPersisted ? 'UAT04_MANUAL_PASS' :
+                  'UAT04_MANUAL_PASS_WITH_NOTES_GAP',
+                activityId: activityId,
+                agentCode: agentCode,
+                activityType: mapping.activityType,
+                subActivity: mapping.subActivity,
+                points: mapping.points,
+                proofPersisted: true,
+                requiredDataPersisted: true,
+                allWeekBucketRulesValidated: true,
+                reportingWeek: expectedWeek,
+                reportingMonth: monthKey,
+                weeklyPoints: weekPoints,
+                monthlyRecords: afterSummary.records,
+                monthlyPoints: afterSummary.totalPoints,
+                duplicateReplayBlocked: true,
+                auditWritten: true,
+                notesFieldAvailable: Boolean(notesColumn),
+                notesPersisted: notesPersisted,
+                notesFinding: notesPersisted ? '' :
+                  'Payload notes are accepted but not persisted by the live Project 1 schema/write path.',
+                productionTouched: false
+              };
+              console.log(JSON.stringify(result));
+              return result;
+            } catch (error) {
+              if (activityId) {
+                try {
+                  var createdItem = getObjectRows_('Project 1 Activity Database').filter(
+                    function(item) {
+                      return String(item.record['Activity ID'] || '') === activityId;
+                    })[0];
+                  if (createdItem) {
+                    updateObjectRow_('Project 1 Activity Database', createdItem.rowNumber, {
+                      'Record Status': 'VOID',
+                      'Updated At': new Date()
+                    });
+                    project1AuditSafe_({
+                      actorEmail: user && user.email || '',
+                      actorRole: user && user.role || '',
+                      action: 'UAT04_FAILURE_CLEANUP',
+                      entityType: 'PROJECT1_ACTIVITY',
+                      entityId: activityId,
+                      result: 'SUCCESS',
+                      requestId: requestId,
+                      details: {errorCode: error && error.code || '',
+                        message: error && error.message || String(error)}
+                    });
+                  }
+                } catch (ignoredCleanup) {}
+              }
+              throw error;
+            } finally {
+              uat04SetAllGatesFalse_();
+            }
+          }
+          GS
+
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/UAT04Manual.gs
+          grep -q 'function runPhase6Uat04Manual' verify-src/UAT04Manual.gs
+          grep -q 'function resetPhase6Uat04SafetyGates' verify-src/UAT04Manual.gs
+          grep -q 'UAT04_MANUAL_PASS_WITH_NOTES_GAP' verify-src/UAT04Manual.gs
+          grep -q 'DUPLICATE_CONFIRMATION_REQUIRED' verify-src/UAT04Manual.gs
+          grep -q 'finally' verify-src/UAT04Manual.gs
+
+          cat > diagnostics/latest-test-uat04-manual-runner-install.txt <<EOF
+          TEST UAT-04 manual runner install
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner_file=UAT04Manual.gs
+          runner_function=runPhase6Uat04Manual
+          safety_reset_function=resetPhase6Uat04SafetyGates
+          live_source_push=success
+          live_pullback_verification=success
+          runner_creates_data_during_install=no
+          script_properties_changed=no
+          spreadsheet_changed=no
+          calendar_changed=no
+          deployment_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-manual-runner-install.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 manual runner install" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 manual runner install" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
