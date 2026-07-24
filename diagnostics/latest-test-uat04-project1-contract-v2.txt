@@ -1,0 +1,1764 @@
+TEST UAT-04 Project 1 contract inspection V2
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+source_file_count=23
+matched_function_count=46
+matched_line_count=219
+
+## Matched functions
+### Analytics.gs :: refreshAllAnalytics_
+function refreshAllAnalytics_() {
+  var environment = assertAnalyticsWritesEnabled_();
+  return withScriptLock_('analytics-refresh', function() {
+    var startedAt = new Date();
+    var snapshot = buildAnalyticsSnapshot_(startedAt);
+    var written = 0;
+
+    written += replaceDerivedRows_('Lead Analytics', snapshot.leads.metricRows, 4);
+    written += replaceDerivedRows_('Recruitment Analytics',
+      snapshot.recruitment.metricRows, 4);
+    written += replaceDerivedRows_('Calendar and Booking Analytics',
+      snapshot.bookings.metricRows, 4);
+    written += replaceDerivedRows_('Project 1 Performance Analytics',
+      snapshot.project1.metricRows, 4);
+    written += upsertMonthlySnapshot_(snapshot);
+    written += writeReportsRegistry_(snapshot);
+
+    var dashboard = refreshDashboard_(snapshot);
+    written += Number(dashboard.cellsWritten || 0);
+
+    var result = {
+      code: 'ANALYTICS_REFRESHED',
+      environment: environment,
+      asOf: snapshot.asOfIso,
+      recordsRead: snapshot.recordsRead,
+      recordsWritten: written,
+      analyticsRows: {
+        leads: snapshot.leads.metricRows.length,
+        recruitment: snapshot.recruitment.metricRows.length,
+        bookings: snapshot.bookings.metricRows.length,
+        project1: snapshot.project1.metricRows.length
+      },
+      dashboardRange: dashboard.range
+    };
+    logAuditEvent_({
+      action: 'ANALYTICS_REFRESH',
+      entityType: 'DERIVED_REPORTING',
+      entityId: snapshot.monthKey,
+      result: 'SUCCESS',
+      details: result
+    });
+    return result;
+  });
+}
+
+### Analytics.gs :: getManagementDashboardData
+function getManagementDashboardData() {
+  requireUserRole_(['ADMIN', 'MANAGER', 'STAFF', 'VIEWER']);
+  var snapshot = buildAnalyticsSnapshot_(new Date());
+  return {
+    asOf: snapshot.asOfIso,
+    month: snapshot.monthKey,
+    cards: {
+      totalLeads: snapshot.leads.cards.totalLeads,
+      activeApplicants: snapshot.recruitment.cards.activeApplicants,
+      activeBookings: snapshot.bookings.cards.activeBookings,
+      project1PointsThisMonth: snapshot.project1.cards.currentMonthPoints
+    },
+    breakdowns: {
+      leadStatus: snapshot.leads.breakdowns.status,
+      recruitmentStage: snapshot.recruitment.breakdowns.stage,
+      bookingStatus: snapshot.bookings.breakdowns.status,
+      project1PointsByType: snapshot.project1.breakdowns.pointsByType
+    }
+  };
+}
+
+### Analytics.gs :: buildAnalyticsSnapshot_
+function buildAnalyticsSnapshot_(asOf) {
+  var generatedAt = asOf instanceof Date ? new Date(asOf.getTime()) : new Date();
+  var source = {
+    leads: analyticsSourceRecords_('Lead Database', ['Lead ID']),
+    applicants: analyticsSourceRecords_('Applicant Tracking', ['Applicant ID']),
+    bookings: analyticsSourceRecords_('Booking Database', ['Booking ID']),
+    calendar: analyticsSourceRecords_('Calendar Log', ['Calendar Log ID', 'Event ID']),
+    project1: analyticsSourceRecords_('Project 1 Activity Database', ['Activity ID'])
+  };
+  var snapshot = {
+    asOf: generatedAt,
+    asOfIso: Utilities.formatDate(generatedAt, AVODAH_CONFIG.TIME_ZONE,
+      "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    monthKey: Utilities.formatDate(generatedAt, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM'),
+    leads: buildLeadAnalyticsCore_(source.leads, generatedAt),
+    recruitment: buildRecruitmentAnalyticsCore_(source.applicants, generatedAt),
+    bookings: buildBookingAnalyticsCore_(source.bookings, source.calendar, generatedAt),
+    project1: buildProject1AnalyticsCore_(source.project1, generatedAt)
+  };
+  snapshot.recordsRead = source.leads.length + source.applicants.length +
+    source.bookings.length + source.calendar.length + source.project1.length;
+  return snapshot;
+}
+
+### Analytics.gs :: buildProject1AnalyticsCore_
+function buildProject1AnalyticsCore_(rows, asOf) {
+  var records = (rows || []).filter(function(record) {
+    return analyticsText_(analyticsValue_(record, ['Activity ID'])) !== '';
+  });
+  var active = records.filter(function(record) {
+    var status = analyticsKey_(analyticsValue_(record, ['Record Status']));
+    return ['VOID', 'INACTIVE', 'ARCHIVED'].indexOf(status) === -1;
+  });
+  var monthKey = Utilities.formatDate(asOf, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM');
+  var currentMonth = active.filter(function(record) {
+    return analyticsRecordMonth_(record) === monthKey;
+  });
+  var duplicateWarnings = active.filter(function(record) {
+    var value = analyticsKey_(analyticsValue_(record, ['Duplicate Status']));
+    return value && value !== 'UNIQUE' && value.indexOf('DUPLICATE') !== -1;
+  }).length;
+  var totalPoints = analyticsSum_(active, ['Points']);
+  var currentMonthPoints = analyticsSum_(currentMonth, ['Points']);
+  var typeCount = analyticsCountBy_(active, ['Activity Type'], 'Unspecified');
+  var pointsByType = analyticsSumBy_(active, ['Activity Type'], ['Points'],
+    'Unspecified');
+  var statusSummary = analyticsCountBy_(active, ['Status Summary'], 'Unspecified');
+  var metricRows = [
+    analyticsMetricRow_('Activity Count', 'All Active', active.length, asOf),
+    analyticsMetricRow_('Points', 'All Active', totalPoints, asOf),
+    analyticsMetricRow_('Activity Count', monthKey, currentMonth.length, asOf),
+    analyticsMetricRow_('Points', monthKey, currentMonthPoints, asOf),
+    analyticsMetricRow_('Duplicate Warning Count', 'All Active',
+      duplicateWarnings, asOf)
+  ];
+  analyticsAppendBreakdownRows_(metricRows, 'Activity Type Count', typeCount, asOf);
+  analyticsAppendBreakdownRows_(metricRows, 'Activity Type Points', pointsByType, asOf);
+  analyticsAppendBreakdownRows_(metricRows, 'Activity Status Count', statusSummary, asOf);
+  return {
+    metricRows: metricRows,
+    cards: {
+      totalActivities: active.length,
+      totalPoints: totalPoints,
+      currentMonthActivities: currentMonth.length,
+      currentMonthPoints: currentMonthPoints,
+      duplicateWarnings: duplicateWarnings
+    },
+    breakdowns: {
+      activityType: typeCount,
+      pointsByType: pointsByType,
+      status: statusSummary
+    }
+  };
+}
+
+### Analytics.gs :: upsertMonthlySnapshot_
+function upsertMonthlySnapshot_(snapshot) {
+  var context = getTableContext_('Monthly Reports');
+  var existing = getObjectRows_('Monthly Reports').map(function(item) {
+    return item.record;
+  }).filter(function(record) {
+    return analyticsMonthCellKey_(record['Snapshot Month']) !== snapshot.monthKey;
+  }).map(function(record) {
+    return [record['Snapshot Month'], record['Metric'], record['Dimension'],
+      record['Value'], record['Generated At']];
+  });
+  var current = [];
+  [
+    ['Leads', snapshot.leads.metricRows],
+    ['Recruitment', snapshot.recruitment.metricRows],
+    ['Calendar and Booking', snapshot.bookings.metricRows],
+    ['Project 1', snapshot.project1.metricRows]
+  ].forEach(function(module) {
+    module[1].forEach(function(row) {
+      current.push([snapshot.monthKey, module[0] + ' / ' + row[0], row[1], row[2],
+        snapshot.asOf]);
+    });
+  });
+  var rows = existing.concat(current);
+  var sheet = context.sheet;
+  if (sheet.getLastRow() > 1) {
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, 5).clearContent();
+  }
+  if (rows.length) {
+    sheet.getRange(2, 1, rows.length, 5).setValues(rows);
+    sheet.getRange(2, 5, rows.length, 1).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+  }
+  formatMonthlyRows_(sheet, rows);
+  ensureDerivedSheetWarning_(sheet, 'AVODAH_DERIVED_MONTHLY_REPORTS');
+  return rows.length;
+}
+
+### Analytics.gs :: writeReportsRegistry_
+function writeReportsRegistry_(snapshot) {
+  var rows = [
+    ['DAILY_REPORT', 'Daily Report',
+      Utilities.formatDate(snapshot.asOf, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM-dd'),
+      'PRESERVED - LIVE FORMULAS', snapshot.asOf],
+    ['WEEKLY_REPORT', 'Weekly Report',
+      Utilities.formatDate(reportingWeekStart_(snapshot.asOf),
+        AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM-dd'),
+      'PRESERVED - LIVE FORMULAS', snapshot.asOf],
+    ['MONTHLY_REPORT', 'Monthly Reports', snapshot.monthKey, 'REFRESHED', snapshot.asOf],
+    ['LEAD_ANALYTICS', 'Lead Analytics', 'CURRENT', 'REFRESHED', snapshot.asOf],
+    ['RECRUITMENT_ANALYTICS', 'Recruitment Analytics', 'CURRENT', 'REFRESHED',
+      snapshot.asOf],
+    ['BOOKING_ANALYTICS', 'Calendar and Booking Analytics', 'CURRENT', 'REFRESHED',
+      snapshot.asOf],
+    ['PROJECT1_ANALYTICS', 'Project 1 Performance Analytics', 'CURRENT',
+      'REFRESHED', snapshot.asOf],
+    ['MANAGEMENT_DASHBOARD', 'Management Dashboard', 'CURRENT', 'REFRESHED',
+      snapshot.asOf]
+  ];
+  return replaceDerivedRows_('Reports and Analytics', rows, 5);
+}
+
+### Analytics.gs :: runAnalyticsValidationTests
+function runAnalyticsValidationTests() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  var tests = [];
+  var now = new Date('2026-07-22T10:00:00+08:00');
+  var leads = buildLeadAnalyticsCore_([
+    {'Lead ID': 'L1', 'Inquiry Count': 1, 'Lead Status': 'New',
+      'Record Status': 'ACTIVE'},
+    {'Lead ID': 'L2', 'Inquiry Count': 3, 'Lead Status': 'Booked',
+      'Booking ID': 'B1', 'Record Status': 'ACTIVE'},
+    {'Lead ID': 'L3', 'Inquiry Count': 1, 'Lead Status': 'Closed',
+      'Record Status': 'ARCHIVED'}
+  ], now);
+  analyticsTestAssert_(tests, 'lead totals include historical records',
+    leads.cards.totalLeads === 3);
+  analyticsTestAssert_(tests, 'active lead count excludes archived records',
+    leads.cards.activeLeads === 2);
+  analyticsTestAssert_(tests, 'repeat inquiry count uses Inquiry Count',
+    leads.cards.repeatInquiryLeads === 1);
+
+  var recruitment = buildRecruitmentAnalyticsCore_([
+    {'Applicant ID': 'A1', 'Current Stage': 'Screening', 'Current Status': 'New',
+      'Record Status': 'ACTIVE'},
+    {'Applicant ID': 'A2', 'Current Stage': 'Closed', 'Current Status': 'Hired',
+      'Requirements Status': 'Complete', 'Onboarding Status': 'Completed',
+      'Record Status': 'ACTIVE'}
+  ], now);
+  analyticsTestAssert_(tests, 'recruitment keeps stage and status separate',
+    recruitment.breakdowns.stage.length === 2 &&
+      recruitment.breakdowns.status.length === 2);
+  analyticsTestAssert_(tests, 'hired applicant count is status-based',
+    recruitment.cards.hiredApplicants === 1);
+
+  var bookings = buildBookingAnalyticsCore_([
+    {'Booking ID': 'B1', 'Status': 'Scheduled', 'Google Event ID': 'E1',
+      'Meet Link': 'https://meet.google.com/test', 'Reconciliation Status': 'OK'},
+    {'Booking ID': 'B2', 'Status': 'Cancelled', 'Reconciliation Status': 'ERROR'}
+  ], [{'Event ID': 'E1', 'Status': 'Scheduled'}], now);
+  analyticsTestAssert_(tests, 'active booking rules exclude cancelled records',
+    bookings.cards.activeBookings === 1);
+  analyticsTestAssert_(tests, 'booking reconciliation issues are surfaced',
+    bookings.cards.reconciliationIssues === 1);
+
+  var project1 = buildProject1AnalyticsCore_([
+    {'Activity ID': 'P1', 'Activity Date': now, 'Activity Type': 'Sales',
+      'Points': 2, 'Duplicate Status': 'UNIQUE', 'Record Status': 'ACTIVE'},
+    {'Activity ID': 'P2', 'Activity Date': now, 'Activity Type': 'Recruitment',
+      'Points': 3, 'Duplicate Status': 'POSSIBLE DUPLICATE', 'Record Status': 'ACTIVE'},
+    {'Activity ID': 'P3', 'Activity Date': now, 'Activity Type': 'Sales',
+      'Points': 100, 'Record Status': 'VOID'}
+  ], now);
+  analyticsTestAssert_(tests, 'Project 1 totals exclude void activities',
+    project1.cards.totalActivities === 2 && project1.cards.totalPoints === 5);
+  analyticsTestAssert_(tests, 'Project 1 current-month points are grouped',
+    project1.cards.currentMonthPoints === 5 &&
+      project1.breakdowns.pointsByType.length === 2);
+
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {passed: failures.length === 0, tests: tests, failures: failures};
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### Analytics.gs :: runAnalyticsTestTransaction
+function runAnalyticsTestTransaction() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  if (getEnvironment_() !== 'TEST') {
+    throw avodahError_('TEST_ENVIRONMENT_REQUIRED',
+      'Analytics transaction tests run only in TEST.');
+  }
+  assertAnalyticsWritesEnabled_();
+  var tests = [];
+  var sourceBefore = analyticsSourceFingerprint_();
+  var legacyBefore = analyticsLegacyFingerprint_();
+  var first = refreshAllAnalytics_();
+  var firstSignature = analyticsDerivedSignature_();
+  var second = refreshAllAnalytics_();
+  var secondSignature = analyticsDerivedSignature_();
+  var sourceAfter = analyticsSourceFingerprint_();
+  var legacyAfter = analyticsLegacyFingerprint_();
+  var snapshot = buildAnalyticsSnapshot_(new Date());
+
+  analyticsTestAssert_(tests, 'operational source values remain unchanged',
+    sourceBefore === sourceAfter);
+  analyticsTestAssert_(tests, 'legacy Dashboard and report formulas remain unchanged',
+    legacyBefore === legacyAfter);
+  analyticsTestAssert_(tests, 'repeat refresh is idempotent excluding freshness timestamps',
+    firstSignature === secondSignature);
+  analyticsTestAssert_(tests, 'lead analytics rows match the source-backed model',
+    first.analyticsRows.leads === snapshot.leads.metricRows.length);
+  analyticsTestAssert_(tests, 'recruitment analytics rows match the source-backed model',
+    first.analyticsRows.recruitment === snapshot.recruitment.metricRows.length);
+  analyticsTestAssert_(tests, 'booking analytics rows match the source-backed model',
+    first.analyticsRows.bookings === snapshot.bookings.metricRows.length);
+  analyticsTestAssert_(tests, 'Project 1 analytics rows match the source-backed model',
+    first.analyticsRows.project1 === snapshot.project1.metricRows.length);
+  analyticsTestAssert_(tests, 'second refresh completed in TEST',
+    second.code === 'ANALYTICS_REFRESHED' && second.environment === 'TEST');
+  analyticsTestAssert_(tests, 'monthly snapshot has no duplicate metric keys',
+    analyticsMonthlySnapshotKeysAreUnique_(snapshot.monthKey));
+
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {
+    passed: failures.length === 0,
+    tests: tests,
+    failures: failures,
+    refresh: second
+  };
+  logAuditEvent_({
+    action: 'ANALYTICS_TEST_TRANSACTION',
+    entityType: 'DERIVED_REPORTING',
+    entityId: snapshot.monthKey,
+    result: result.passed ? 'SUCCESS' : 'FAILED',
+    details: {tests: tests}
+  });
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### Analytics.gs :: analyticsSourceFingerprint_
+function analyticsSourceFingerprint_() {
+  return analyticsFingerprintRanges_([
+    ['Lead Database', null],
+    ['Applicant Tracking', null],
+    ['Booking Database', null],
+    ['Calendar Log', null],
+    ['Project 1 Activity Database', null]
+  ]);
+}
+
+### Code.gs :: classifyScheduleCategory_
+function classifyScheduleCategory_(title, rawText) {
+  const value = String(title || "").toUpperCase();
+  const context = String(rawText || "").toUpperCase();
+
+  if (/LAUNDRY|FAMILY|FAM TIME|CHOIR|CHURCH|DAUGHTERS OF MARY|\bDOM\b|BIRTHDAY|CHAO PI MAI|COFFEE SHOP/.test(value)) return "Personal";
+  if (/AVODAH|JOB INTERVIEW|FINAL INTERVIEW|INTERVIEW|ORIENTATION|PAYROLL|PASS REPORT|PROJECT 1|ERECRUITMENT|E-RECRUITMENT|\bGAS\b|RECRUIT|OONA/.test(value)) return "Avodah";
+  if (/\bCSB\b|CITY SAVINGS/.test(value)) return "CSB";
+  if (/\bINS\b|MANULIFE/.test(value)) return "Manulife";
+
+  if (/\bCSB\b|CITY SAVINGS/.test(context) &&
+      /BM WEEKLY MEETING|CLIENT LISTING|APPOINTMENT CALL|FOLLOW\s*UPS?|CALLS UPDATING REVIEWS|FIELD RAPPORT/.test(value)) {
+    return "CSB";
+  }
+
+  if (/CLIENT|FIELD RAPPORT|PRESENTATION|GAMETIME|FOLLOW\s*UPS?|APPOINTMENT CALL/.test(value)) {
+    if (/RECRUIT/.test(value)) return "Avodah";
+    return "Manulife";
+  }
+
+  if (/AVODAH|RECRUIT|ERECRUITMENT|JOB INTERVIEW/.test(context)) return "Avodah";
+  if (/\bINS\b|MANULIFE|FIELD RAPPORT|CLIENT/.test(context)) return "Manulife";
+  if (/\bCSB\b|CITY SAVINGS/.test(context)) return "CSB";
+  return "Avodah";
+}
+
+### Code.gs :: productionHealthCheck
+function productionHealthCheck() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const requiredSheets = [
+    LEADS_SHEET_NAME,
+    CALENDAR_LOG_SHEET_NAME,
+    SETTINGS_SHEET_NAME,
+    CHRISTINE_CALENDAR_SHEET_NAME,
+    SCHEDULE_IMPORT_SHEET_NAME,
+    SCHEDULE_PREVIEW_SHEET_NAME
+  ];
+  const missingSheets = requiredSheets.filter(function(name) { return !ss.getSheetByName(name); });
+  const optionalMissingSheets = [
+    BOOKING_AUDIT_SHEET_NAME,
+    BOOKING_BLACKOUTS_SHEET_NAME,
+    BOOKING_REGISTRY_SHEET_NAME,
+    BOOKING_RECONCILIATION_SHEET_NAME
+  ].filter(function(name) { return !ss.getSheetByName(name); });
+
+  let config = null;
+  let configError = "";
+  try {
+    config = typeof getBookingRuntimeConfig_ === "function"
+      ? getBookingRuntimeConfig_() : getBookingConfig_();
+  } catch (error) {
+    configError = String(error && error.message ? error.message : error);
+  }
+
+  const properties = PropertiesService.getScriptProperties();
+  const secretConfigured = Boolean(properties.getProperty("WEBHOOK_SECRET"));
+  const nextSecretConfigured = Boolean(properties.getProperty("WEBHOOK_SECRET_NEXT"));
+  const environment = String(properties.getProperty("ENVIRONMENT") || "").trim().toUpperCase();
+  const calendarWritesEnabled = String(properties.getProperty("ENABLE_CALENDAR_WRITES") || "")
+    .trim().toUpperCase() === "TRUE";
+  const bookingWorkflowEnabled = String(properties.getProperty("ENABLE_BOOKING_WORKFLOW") || "")
+    .trim().toUpperCase() === "TRUE";
+  const project1WritesEnabled = String(properties.getProperty("ENABLE_PROJECT1_WRITES") || "")
+    .trim().toUpperCase() === "TRUE";
+  const managementBaseUrl = getManagementBaseUrl_();
+  const adminAlertEmail = getAdminAlertEmail_();
+  let calendarAccessible = false;
+  let calendarError = "";
+  if (config) {
+    try {
+      calendarAccessible = Boolean(getCalendar_(config.calendarId));
+    } catch (error) {
+      calendarError = String(error && error.message ? error.message : error);
+    }
+  }
+
+  const scriptTimezone = Session.getScriptTimeZone();
+  const spreadsheetTimezone = ss.getSpreadsheetTimeZone();
+  const configuredTimezone = config ? config.timezone : "";
+  const timezoneAligned = Boolean(configuredTimezone) &&
+    scriptTimezone === configuredTimezone &&
+    spreadsheetTimezone === configuredTimezone;
+
+  const warnings = [];
+  if (!timezoneAligned) warnings.push("Script, spreadsheet, and booking configuration time zones are not aligned.");
+  if (optionalMissingSheets.length) warnings.push("Optional production support sheets are missing: " + optionalMissingSheets.join(", "));
+  if (!nextSecretConfigured) warnings.push("WEBHOOK_SECRET_NEXT is not configured; zero-downtime secret rotation is unavailable.");
+  if (!calendarWritesEnabled) warnings.push("Calendar writes are disabled by default and require an approved TEST transaction.");
+  if (!bookingWorkflowEnabled) warnings.push("The booking workflow write gate is disabled by default.");
+  if (!project1WritesEnabled) warnings.push("Project 1 writes are disabled by default.");
+  if (!managementBaseUrl) warnings.push("Self-service booking management is unavailable until BOOKING_MANAGEMENT_BASE_URL is configured.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminAlertEmail)) warnings.push("No valid booking/admin notification email is configured.");
+
+  const result = {
+    ok: missingSheets.length === 0 && !configError && secretConfigured && calendarAccessible && timezoneAligned,
+    version: PRODUCTION_VERSION,
+    environment: environment,
+    spreadsheet: ss.getName(),
+    missing_sheets: missingSheets,
+    optional_missing_sheets: optionalMissingSheets,
+    webhook_secret_configured: secretConfigured,
+    webhook_secret_next_configured: nextSecretConfigured,
+    booking_management_configured: Boolean(managementBaseUrl),
+    booking_admin_alert_configured: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminAlertEmail),
+    calendar_id_configured: Boolean(config && config.calendarId),
+    calendar_binding: config && config.calendarBinding || "",
+    calendar_accessible: calendarAccessible,
+    calendar_writes_enabled: calendarWritesEnabled,
+    booking_workflow_enabled: bookingWorkflowEnabled,
+    project1_writes_enabled: project1WritesEnabled,
+    calendar_error: calendarError,
+    booking_owner: config ? config.owner : "",
+    configured_timezone: configuredTimezone,
+    script_timezone: scriptTimezone,
+    spreadsheet_timezone: spreadsheetTimezone,
+    timezone_aligned: timezoneAligned,
+    config_error: configError,
+    warnings: warnings
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### Dashboard.gs :: writeDashboardOwnedRange_
+function writeDashboardOwnedRange_(sheet, snapshot) {
+  var owned = sheet.getRange(AVODAH_DASHBOARD_RANGE);
+  owned.breakApart();
+  owned.clearContent();
+  owned.clearFormat();
+
+  var green = '#05542A';
+  var lightGreen = '#F4F9F7';
+  var paleBlue = '#E8F4FE';
+  var white = '#FFFFFF';
+  var gray = '#5F6368';
+
+  sheet.getRange('A45:L45').merge().setValue(AVODAH_DASHBOARD_MARKER)
+    .setBackground(green).setFontColor(white).setFontWeight('bold')
+    .setFontSize(16).setHorizontalAlignment('left').setVerticalAlignment('middle');
+  sheet.setRowHeight(45, 36);
+
+  var freshness = 'As of ' + snapshot.asOfIso +
+    ' | Sources: Lead Database, Applicant Tracking, Booking Registry, ' +
+    'Calendar Log, Project 1 Activity Database';
+  sheet.getRange('A46:L46').merge().setValue(freshness)
+    .setBackground(paleBlue).setFontColor(gray).setFontSize(9)
+    .setWrap(true).setVerticalAlignment('middle');
+  sheet.setRowHeight(46, 32);
+
+  var cards = [
+    {range: 'A48:C48', valueRange: 'A49:C50', label: 'TOTAL LEADS',
+      value: snapshot.leads.cards.totalLeads,
+      note: 'Count of Lead Database rows with a Lead ID.'},
+    {range: 'D48:F48', valueRange: 'D49:F50', label: 'ACTIVE APPLICANTS',
+      value: snapshot.recruitment.cards.activeApplicants,
+      note: 'Applicant Tracking rows excluding inactive, archived, void, or deleted records.'},
+    {range: 'G48:I48', valueRange: 'G49:I50', label: 'ACTIVE BOOKINGS',
+      value: snapshot.bookings.cards.activeBookings,
+      note: 'Scheduled, confirmed, or rescheduled Booking Registry rows.'},
+    {range: 'J48:L48', valueRange: 'J49:L50',
+      label: 'PROJECT 1 POINTS - ' + snapshot.monthKey,
+      value: snapshot.project1.cards.currentMonthPoints,
+      note: 'Active Project 1 points whose activity date falls in the displayed month.'}
+  ];
+  cards.forEach(function(card) {
+    sheet.getRange(card.range).merge().setValue(card.label)
+      .setBackground(green).setFontColor(white).setFontWeight('bold')
+      .setHorizontalAlignment('center').setVerticalAlignment('middle');
+    sheet.getRange(card.valueRange).merge().setValue(card.value)
+      .setBackground(lightGreen).setFontColor(green).setFontWeight('bold')
+      .setFontSize(22).setHorizontalAlignment('center').setVerticalAlignment('middle')
+      .setNote(card.note).setNumberFormat('0');
+  });
+  sheet.setRowHeights(49, 2, 28);
+
+  var sections = [
+    {header: 'A53:C53', label: 'LEAD STATUS', startColumn: 1,
+      rows: snapshot.leads.breakdowns.status},
+    {header: 'D53:F53', label: 'RECRUITMENT STAGE', startColumn: 4,
+      rows: snapshot.recruitment.breakdowns.stage},
+    {header: 'G53:I53', label: 'BOOKING STATUS', startColumn: 7,
+      rows: snapshot.bookings.breakdowns.status},
+    {header: 'J53:L53', label: 'PROJECT 1 POINTS BY TYPE', startColumn: 10,
+      rows: snapshot.project1.breakdowns.pointsByType}
+  ];
+  sections.forEach(function(section) {
+    sheet.getRange(section.header).merge().setValue(section.label)
+      .setBackground(green).setFontColor(white).setFontWeight('bold')
+      .setHorizontalAlignment('center');
+    writeDashboardBreakdown_(sheet, section.startColumn, section.rows, lightGreen,
+      green);
+  });
+  sheet.setRowHeight(53, 26);
+  sheet.setRowHeights(54, 10, 22);
+
+  sheet.getRange('A67:L67').merge()
+    .setValue('DERIVED VIEW - update operational source databases, not this dashboard block.')
+    .setBackground(paleBlue).setFontColor(gray).setFontStyle('italic')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle');
+  sheet.setRowHeight(67, 28);
+
+  owned.setBorder(true, true, true, true, false, false, '#DADCE0',
+    SpreadsheetApp.BorderStyle.SOLID);
+}
+
+### FoundationTests.gs :: runFoundationTests
+function runFoundationTests() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  var tests = [];
+  testAssert_(tests, 'email normalization',
+    normalizeEmail_(' Test.User@Example.COM ') === 'test.user@example.com');
+  testAssert_(tests, 'valid email', isValidEmail_('test.user@example.com'));
+  testAssert_(tests, 'invalid email rejected', !isValidEmail_('not-an-email'));
+  testAssert_(tests, 'Philippines phone normalization',
+    normalizePhone_('0917 123 4567') === '+639171234567');
+  testAssert_(tests, 'normalized phone validation',
+    isValidPhone_('+639171234567'));
+  testAssert_(tests, 'explicit consent accepted', isConsentGranted_('Yes'));
+  testAssert_(tests, 'missing consent rejected', !isConsentGranted_('No'));
+  testAssert_(tests, 'header normalization',
+    normalizeHeader_('Booking_ID') === normalizeHeader_('Booking ID'));
+  var intakeId = generateUniqueId_('INTAKE');
+  var secondIntakeId = generateUniqueId_('INTAKE');
+  testAssert_(tests, 'INT id prefix', intakeId.indexOf('INT-') === 0);
+  testAssert_(tests, 'unique IDs', intakeId !== secondIntakeId);
+  var names = AVODAH_CONFIG.SHEET_DEFINITIONS.map(function(item) { return item.name; });
+  testAssert_(tests, 'unique logical sheet names',
+    names.length === names.filter(function(name, index) {
+      return names.indexOf(name) === index;
+    }).length);
+  testAssert_(tests, 'README Project 1 mapping count',
+    AVODAH_PROJECT1_ACTIVITY_SEEDS.length === 18);
+  var pointSum = AVODAH_PROJECT1_ACTIVITY_SEEDS.reduce(function(sum, row) {
+    return sum + Number(row[2]);
+  }, 0);
+  testAssert_(tests, 'README Project 1 point total', pointSum === 41);
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {passed: failures.length === 0, tests: tests, failures: failures};
+  try { console.log(JSON.stringify(result)); } catch (ignored) {}
+  return result;
+}
+
+### FoundationTests.gs :: runSecurityValidationTests
+function runSecurityValidationTests() {
+  var user = requireUserRole_(['ADMIN', 'MANAGER']);
+  var tests = [];
+  var properties = PropertiesService.getScriptProperties();
+  var spreadsheet = getHubSpreadsheet_();
+  var writeGates = [
+    'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+    'ENABLE_RECRUITMENT_WRITES', 'ENABLE_ANALYTICS_WRITES',
+    'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+    'PUBLIC_PORTAL_ENABLED', 'ENABLE_AUTOMATION_TRIGGERS'
+  ];
+  testAssert_(tests, 'authenticated USER_ROLE is active',
+    Boolean(user && ['ADMIN', 'MANAGER'].indexOf(user.role) !== -1));
+  testAssert_(tests, 'environment remains TEST', getEnvironment_() === 'TEST');
+  testAssert_(tests, 'configured spreadsheet remains TEST-labelled',
+    /^TEST(?:\s|-)/i.test(spreadsheet.getName()));
+  testAssert_(tests, 'required Script Properties are present',
+    AVODAH_CONFIG.REQUIRED_SCRIPT_PROPERTIES.every(function(name) {
+      return Boolean(properties.getProperty(name));
+    }));
+  testAssert_(tests, 'all activation/write gates are disabled',
+    writeGates.every(function(name) {
+      return !truthy_(properties.getProperty(name));
+    }));
+  testAssert_(tests, 'no project triggers are installed while disabled',
+    ScriptApp.getProjectTriggers().length === 0);
+  testAssert_(tests, 'trigger definitions are valid',
+    validateRequiredTriggerDefinitions_().valid);
+  testAssert_(tests, 'forged webhook secret is rejected',
+    !isAuthorizedWebhookSecret_('AVODAH-INVALID-SECURITY-TEST'));
+  testAssert_(tests, 'direct trigger callback is rejected',
+    testErrorCode_(function() {
+      assertAuthorizedTriggerEvent_('scheduledDashboardRefresh', null);
+    }) === 'AUTOMATION_TRIGGERS_DISABLED');
+  testAssert_(tests, 'Advanced Calendar service is available',
+    Boolean(typeof Calendar !== 'undefined' && Calendar.Events && Calendar.Freebusy));
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {passed: failures.length === 0, tests: tests, failures: failures};
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### FoundationTests.gs :: runAllReadOnlyValidationTests
+function runAllReadOnlyValidationTests() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  var definitions = [
+    ['Foundation', runFoundationTests],
+    ['Intake and Leads', runIntakeLeadValidationTests],
+    ['Booking Rules', runBookingValidationTests],
+    ['Project 1', runProject1ValidationTests],
+    ['Recruitment', runRecruitmentValidationTests],
+    ['Analytics', runAnalyticsValidationTests],
+    ['Scheduled Reporting', runScheduledReportingValidationTests],
+    ['Schedule Import', runScheduleImportValidationTests],
+    ['Security Gates', runSecurityValidationTests],
+    ['Public Portal', runPublicPortalValidationTests]
+  ];
+  var suites = definitions.map(function(definition) {
+    try {
+      var result = definition[1]();
+      return {
+        name: definition[0],
+        passed: Boolean(result && result.passed),
+        assertions: result && result.tests ? result.tests.length : 0,
+        failures: result && result.failures ? result.failures : []
+      };
+    } catch (error) {
+      return {
+        name: definition[0],
+        passed: false,
+        assertions: 0,
+        failures: [{name: error.code || error.name || 'ERROR',
+          message: error.message}]
+      };
+    }
+  });
+  var output = {
+    passed: suites.every(function(suite) { return suite.passed; }),
+    assertions: suites.reduce(function(total, suite) {
+      return total + Number(suite.assertions || 0);
+    }, 0),
+    suites: suites
+  };
+  console.log(JSON.stringify(output));
+  return output;
+}
+
+### Project1.gs :: project1MappingKey_
+function project1MappingKey_(activityType, subActivity) {
+  return String(activityType || '').trim().toLowerCase() + '|' +
+    String(subActivity || '').trim().toLowerCase();
+}
+
+### Project1.gs :: getProject1PointMapping_
+function getProject1PointMapping_() {
+  var seen = {};
+  return getActiveSettingsByGroupSafe_('PROJECT1_ACTIVITY').map(function(row) {
+    var item = safeJsonParse_(row.value, null);
+    if (!item || !item.activityType || !item.subActivity ||
+        !Number.isFinite(Number(item.points)) || Number(item.points) < 0 ||
+        !Array.isArray(item.requiredFields)) {
+      throw avodahError_('PROJECT1_MAPPING_INVALID',
+        'Invalid PROJECT1_ACTIVITY configuration row: ' + row.key);
+    }
+    var key = project1MappingKey_(item.activityType, item.subActivity);
+    if (seen[key]) {
+      throw avodahError_('PROJECT1_MAPPING_DUPLICATE',
+        'More than one active mapping exists for ' + item.activityType +
+        ' / ' + item.subActivity + '.');
+    }
+    item.requiredFields.forEach(function(fieldKey) {
+      if (!AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey]) {
+        throw avodahError_('PROJECT1_FIELD_UNKNOWN',
+          'Unknown Project 1 required field: ' + fieldKey);
+      }
+    });
+    seen[key] = true;
+    return {
+      activityType: String(item.activityType).trim(),
+      subActivity: String(item.subActivity).trim(),
+      points: Number(item.points),
+      requiredFields: item.requiredFields.slice(),
+      settingRow: row.rowNumber
+    };
+  });
+}
+
+### Project1.gs :: project1ActivityTypes_
+function project1ActivityTypes_() {
+  return getProject1PointMapping_().map(function(item) {
+    return item.activityType;
+  }).filter(function(value, index, all) {
+    return all.indexOf(value) === index;
+  });
+}
+
+### Project1.gs :: project1SubActivities_
+function project1SubActivities_() {
+  return getProject1PointMapping_().map(function(item) {
+    return item.subActivity;
+  }).filter(function(value, index, all) {
+    return all.indexOf(value) === index;
+  });
+}
+
+### Project1.gs :: project1TeamMemberOptions_
+function project1TeamMemberOptions_() {
+  return getActiveSettingsByGroupSafe_('TEAM_MEMBER').map(function(row) {
+    return String(row.value || row.key || '').trim();
+  }).filter(function(value, index, all) {
+    return value && all.indexOf(value) === index;
+  });
+}
+
+### Project1.gs :: findProject1Mapping_
+function findProject1Mapping_(activityType, subActivity) {
+  var key = project1MappingKey_(activityType, subActivity);
+  return getProject1PointMapping_().filter(function(item) {
+    return project1MappingKey_(item.activityType, item.subActivity) === key;
+  })[0] || null;
+}
+
+### Project1.gs :: assertProject1WritesEnabled_
+function assertProject1WritesEnabled_() {
+  if (getEnvironment_() !== 'TEST') {
+    throw avodahError_('TEST_ONLY',
+      'This Project 1 package is restricted to the copied TEST environment.');
+  }
+  var spreadsheet = getHubSpreadsheet_();
+  if (!/^TEST(?:\s|-)/i.test(spreadsheet.getName())) {
+    throw avodahError_('TEST_ONLY',
+      'Project 1 writes require a spreadsheet whose title begins with TEST.');
+  }
+  var enabled = String(PropertiesService.getScriptProperties()
+    .getProperty('ENABLE_PROJECT1_WRITES') || '').trim().toUpperCase();
+  if (enabled !== 'TRUE') {
+    throw avodahError_('PROJECT1_WRITES_DISABLED',
+      'Set ENABLE_PROJECT1_WRITES=TRUE only for an approved TEST transaction.');
+  }
+}
+
+### Project1.gs :: project1Date_
+function project1Date_(value, fieldName) {
+  var date;
+  if (value instanceof Date) {
+    date = new Date(value.getTime());
+  } else {
+    var text = String(value == null ? '' : value).trim();
+    var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+    if (match) {
+      date = new Date(Number(match[1]), Number(match[2]) - 1,
+        Number(match[3]), 12, 0, 0, 0);
+      if (Utilities.formatDate(date, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM-dd') !== text) {
+        date = new Date('invalid');
+      }
+    } else {
+      date = new Date(value);
+    }
+  }
+  if (!date || isNaN(date.getTime())) {
+    throw avodahError_('INVALID_PROJECT1_DATE',
+      String(fieldName || 'Date') + ' must be a valid date.');
+  }
+  return date;
+}
+
+### Project1.gs :: project1DateKey_
+function project1DateKey_(value) {
+  return Utilities.formatDate(project1Date_(value, 'Activity Date'),
+    AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM-dd');
+}
+
+### Project1.gs :: project1ReportingWeek_
+function project1ReportingWeek_(value) {
+  var day = Number(Utilities.formatDate(project1Date_(value, 'Activity Date'),
+    AVODAH_CONFIG.TIME_ZONE, 'd'));
+  if (day <= 7) return 'Week 1';
+  if (day <= 14) return 'Week 2';
+  if (day <= 21) return 'Week 3';
+  return 'Week 4';
+}
+
+### Project1.gs :: project1ReportingMonth_
+function project1ReportingMonth_(value) {
+  return Utilities.formatDate(project1Date_(value, 'Activity Date'),
+    AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM');
+}
+
+### Project1.gs :: project1MonthValue_
+function project1MonthValue_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM');
+  }
+  var text = String(value == null ? '' : value).trim();
+  if (/^\d{4}-\d{2}$/.test(text)) return text;
+  var parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? text :
+    Utilities.formatDate(parsed, AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM');
+}
+
+### Project1.gs :: project1NormalizeField_
+function project1NormalizeField_(fieldKey, value) {
+  var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+  if (!definition) {
+    throw avodahError_('PROJECT1_FIELD_UNKNOWN',
+      'Unknown Project 1 field: ' + fieldKey);
+  }
+  var text = String(value == null ? '' : value).trim();
+  if (!text) return '';
+  if (definition.inputType === 'date') {
+    return project1DateKey_(value);
+  }
+  if (definition.inputType === 'time') {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(text)) {
+      throw avodahError_('INVALID_PROJECT1_TIME',
+        definition.label + ' must use HH:mm.');
+    }
+    return text;
+  }
+  if (definition.inputType === 'url') {
+    if (!/^https:\/\/[^\s]+$/i.test(text)) {
+      throw avodahError_('INVALID_PROOF_URL',
+        definition.label + ' must be a valid HTTPS URL.');
+    }
+    return text;
+  }
+  return text;
+}
+
+### Project1.gs :: project1RequiredData_
+function project1RequiredData_(mapping, payload) {
+  var supplied = payload && (payload.fields || payload.required_data) || {};
+  if (Object.prototype.toString.call(supplied) !== '[object Object]') {
+    throw avodahError_('INVALID_PROJECT1_FIELDS',
+      'Project 1 fields must be provided as an object.');
+  }
+  var data = {};
+  var proofUrl = '';
+  mapping.requiredFields.forEach(function(fieldKey) {
+    var value = fieldKey === 'proofUrl'
+      ? (payload.proof_url || supplied.proofUrl) : supplied[fieldKey];
+    var normalized = project1NormalizeField_(fieldKey, value);
+    if (!normalized) {
+      throw avodahError_(fieldKey === 'proofUrl' ? 'PROOF_REQUIRED' :
+        'PROJECT1_FIELD_REQUIRED',
+        AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey].label + ' is required.',
+        {field: fieldKey});
+    }
+    if (fieldKey === 'proofUrl') proofUrl = normalized;
+    else data[fieldKey] = normalized;
+  });
+  return {data: data, proofUrl: proofUrl};
+}
+
+### Project1.gs :: project1StatusSummary_
+function project1StatusSummary_(mapping, data) {
+  if (data.interviewStatus) return data.interviewStatus;
+  if (data.interviewResult) return data.interviewResult;
+  if (data.examResult) return data.examResult;
+  var statuses = {
+    'Listing of Prospect Recruit Name': 'Listed',
+    'Call Out for Initial Interview': 'Interview Scheduled',
+    'Orientation Attendance': 'Orientation Attended',
+    'Contract Signing': 'Contract Signed',
+    'Coding': 'Coding Completed',
+    'Licensing': 'Licensed',
+    'Prospect Listing': 'Listed',
+    'Initial Contact / Call Out': 'Contacted',
+    'FNA Conducted': 'FNA Completed',
+    'Proposal Presented': 'Proposal Presented',
+    'Application Submitted': 'Application Submitted',
+    'Issued Policy': 'Policy Issued',
+    'Shadowing / Observation': 'Completed',
+    'Co-Presentation': 'Completed',
+    'Assisted Closing': 'Completed'
+  };
+  return statuses[mapping.subActivity] || 'Completed';
+}
+
+### Project1.gs :: project1Fingerprint_
+function project1Fingerprint_(payload, mapping, requiredData, activityDate) {
+  var ordered = {};
+  mapping.requiredFields.forEach(function(fieldKey) {
+    if (fieldKey !== 'proofUrl') ordered[fieldKey] = requiredData[fieldKey] || '';
+  });
+  var source = [
+    String(payload.agent_code || '').trim().toUpperCase(),
+    project1DateKey_(activityDate),
+    mapping.activityType.toLowerCase(),
+    mapping.subActivity.toLowerCase(),
+    safeJsonStringify_(ordered)
+  ].join('|');
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,
+    source, Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(digest).replace(/=+$/g, '').substring(0, 32);
+}
+
+### Project1.gs :: findActiveProject1Duplicate_
+function findActiveProject1Duplicate_(fingerprint) {
+  return getObjectRows_('Project 1 Activity Database').filter(function(item) {
+    return String(item.record['Duplicate Fingerprint'] || '') === fingerprint &&
+      String(item.record['Record Status'] || 'ACTIVE').toUpperCase() === 'ACTIVE';
+  })[0] || null;
+}
+
+### Project1.gs :: validateProject1Submission_
+function validateProject1Submission_(payload) {
+  var input = payload || {};
+  var activityDate = project1Date_(input.activity_date, 'Activity Date');
+  var agentCode = String(input.agent_code || '').trim();
+  var teamMember = String(input.team_member || '').trim();
+  if (!agentCode) throw avodahError_('AGENT_CODE_REQUIRED', 'Agent Code is required.');
+  if (!teamMember) throw avodahError_('TEAM_MEMBER_REQUIRED', 'Team Member is required.');
+  var teamOptions = project1TeamMemberOptions_();
+  if (teamOptions.length && teamOptions.map(function(value) {
+    return value.toLowerCase();
+  }).indexOf(teamMember.toLowerCase()) === -1) {
+    throw avodahError_('TEAM_MEMBER_NOT_CONFIGURED',
+      'Team Member must match an active TEAM_MEMBER setting.');
+  }
+  var mapping = findProject1Mapping_(input.activity_type, input.sub_activity);
+  if (!mapping) {
+    throw avodahError_('PROJECT1_MAPPING_NOT_FOUND',
+      'Activity Type and Sub-Activity must match one active controlled mapping.');
+  }
+  var required = project1RequiredData_(mapping, input);
+  return {
+    activityDate: activityDate,
+    agentCode: agentCode,
+    teamMember: teamMember,
+    mapping: mapping,
+    requiredData: required.data,
+    proofUrl: required.proofUrl,
+    notes: String(input.notes || '').trim()
+  };
+}
+
+### Project1.gs :: project1AuditSafe_
+function project1AuditSafe_(event) {
+  try {
+    logAuditEvent_(event);
+    return true;
+  } catch (error) {
+    logAutomationSafe_({
+      handler: 'project1AuditSafe_',
+      status: 'WARNING',
+      errorCode: error.code || 'AUDIT_WRITE_FAILED',
+      errorMessage: String(error.message || error),
+      details: {entityId: event.entityId || ''}
+    });
+    return false;
+  }
+}
+
+### Project1.gs :: formatProject1ActivityRow_
+function formatProject1ActivityRow_(rowNumber) {
+  var context = getTableContext_('Project 1 Activity Database');
+  var activityDateColumn = context.headerMap[normalizeHeader_('Activity Date')];
+  if (activityDateColumn) {
+    context.sheet.getRange(rowNumber, activityDateColumn).setNumberFormat('yyyy-mm-dd');
+  }
+}
+
+### Project1.gs :: submitProject1Activity
+function submitProject1Activity(payload) {
+  var user = requireUserRole_(['ADMIN', 'MANAGER', 'STAFF']);
+  return submitProject1Activity_(payload, {
+    user: user,
+    source: 'INTERNAL_HUB',
+    requestId: Utilities.getUuid()
+  });
+}
+
+### Project1.gs :: submitProject1Activity_
+function submitProject1Activity_(payload, options) {
+  assertProject1WritesEnabled_();
+  var settings = options || {};
+  var user = settings.user || requireUserRole_(['ADMIN', 'MANAGER', 'STAFF']);
+  return withScriptLock_('submitProject1Activity', function() {
+    var validated = validateProject1Submission_(payload);
+    var mapping = validated.mapping;
+    var fingerprint = project1Fingerprint_(payload, mapping,
+      validated.requiredData, validated.activityDate);
+    var duplicate = findActiveProject1Duplicate_(fingerprint);
+    if (duplicate && !truthy_(payload && payload.confirm_duplicate)) {
+      return {
+        ok: false,
+        code: 'DUPLICATE_CONFIRMATION_REQUIRED',
+        message: 'A matching Project 1 activity already exists.',
+        existing_activity_id: duplicate.record['Activity ID'] || '',
+        duplicate_status: 'POSSIBLE_DUPLICATE'
+      };
+    }
+
+    var now = new Date();
+    var activityId = generateUniqueId_('PROJECT1');
+    var duplicateStatus = duplicate ? 'CONFIRMED_DUPLICATE' : 'UNIQUE';
+    var rowNumber = appendObjectRow_('Project 1 Activity Database', {
+      'Activity ID': activityId,
+      'Submission Timestamp': now,
+      'Activity Date': validated.activityDate,
+      'Agent Code': validated.agentCode,
+      'Team Member': validated.teamMember,
+      'Activity Type': mapping.activityType,
+      'Sub-Activity': mapping.subActivity,
+      'Points': mapping.points,
+      'Required Data JSON': safeJsonStringify_(validated.requiredData),
+      'Proof URL': validated.proofUrl,
+      'Duplicate Fingerprint': fingerprint,
+      'Duplicate Status': duplicateStatus,
+      'Status Summary': project1StatusSummary_(mapping, validated.requiredData),
+      'Reporting Week': project1ReportingWeek_(validated.activityDate),
+      'Reporting Month': project1ReportingMonth_(validated.activityDate),
+      'Record Status': 'ACTIVE',
+      'Created By': user.email || '',
+      'Created At': now,
+      'Updated At': now
+    });
+    formatProject1ActivityRow_(rowNumber);
+    SpreadsheetApp.flush();
+    var auditWritten = project1AuditSafe_({
+      actorEmail: user.email || '',
+      actorRole: user.role || '',
+      action: 'PROJECT1_ACTIVITY_SUBMITTED',
+      entityType: 'PROJECT1_ACTIVITY',
+      entityId: activityId,
+      result: 'SUCCESS',
+      requestId: settings.requestId || '',
+      details: {
+        activityType: mapping.activityType,
+        subActivity: mapping.subActivity,
+        points: mapping.points,
+        duplicateStatus: duplicateStatus,
+        source: settings.source || ''
+      }
+    });
+    return {
+      ok: true,
+      code: duplicate ? 'PROJECT1_CONFIRMED_DUPLICATE_CREATED' :
+        'PROJECT1_ACTIVITY_CREATED',
+      activity_id: activityId,
+      row_number: rowNumber,
+      points: mapping.points,
+      reporting_week: project1ReportingWeek_(validated.activityDate),
+      reporting_month: project1ReportingMonth_(validated.activityDate),
+      duplicate_status: duplicateStatus,
+      audit_written: auditWritten
+    };
+  });
+}
+
+### Project1.gs :: getProject1FormDefinition
+function getProject1FormDefinition() {
+  var user = requireUserRole_(['ADMIN', 'MANAGER', 'STAFF']);
+  var activities = [];
+  getProject1PointMapping_().forEach(function(mapping) {
+    var activity = activities.filter(function(item) {
+      return item.activityType === mapping.activityType;
+    })[0];
+    if (!activity) {
+      activity = {activityType: mapping.activityType, subActivities: []};
+      activities.push(activity);
+    }
+    activity.subActivities.push({
+      subActivity: mapping.subActivity,
+      points: mapping.points,
+      fields: mapping.requiredFields.map(function(fieldKey) {
+        var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+        return {key: fieldKey, label: definition.label,
+          inputType: definition.inputType, required: true};
+      })
+    });
+  });
+  return {
+    version: AVODAH_CONFIG.VERSION,
+    writeEnabled: String(PropertiesService.getScriptProperties()
+      .getProperty('ENABLE_PROJECT1_WRITES') || '').trim().toUpperCase() === 'TRUE',
+    defaultTeamMember: user.displayName || '',
+    teamMembers: project1TeamMemberOptions_(),
+    activities: activities
+  };
+}
+
+### Project1.gs :: project1MonthlySummaryCore_
+function project1MonthlySummaryCore_(rows, month, options) {
+  var monthKey = String(month || '').trim();
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw avodahError_('INVALID_REPORTING_MONTH',
+      'Reporting month must use YYYY-MM.');
+  }
+  var filterAgent = String(options && options.agentCode || '').trim().toUpperCase();
+  var selected = (rows || []).filter(function(item) {
+    var record = item.record || item;
+    return project1MonthValue_(record['Reporting Month']) === monthKey &&
+      String(record['Record Status'] || 'ACTIVE').toUpperCase() === 'ACTIVE' &&
+      (!filterAgent || String(record['Agent Code'] || '').trim().toUpperCase() === filterAgent);
+  });
+  var typeTotals = {};
+  var subActivityTotals = {};
+  var teamTotals = {};
+  var totalPoints = 0;
+  selected.forEach(function(item) {
+    var record = item.record || item;
+    var points = Number(record.Points || 0);
+    totalPoints += points;
+    var type = String(record['Activity Type'] || 'Unspecified');
+    var sub = type + ' | ' + String(record['Sub-Activity'] || 'Unspecified');
+    var team = String(record['Team Member'] || 'Unassigned');
+    typeTotals[type] = (typeTotals[type] || 0) + points;
+    subActivityTotals[sub] = (subActivityTotals[sub] || 0) + points;
+    teamTotals[team] = (teamTotals[team] || 0) + points;
+  });
+  function toRows_(object) {
+    return Object.keys(object).sort().map(function(key) {
+      return {name: key, points: object[key]};
+    });
+  }
+  return {
+    month: monthKey,
+    records: selected.length,
+    totalPoints: totalPoints,
+    byActivityType: toRows_(typeTotals),
+    bySubActivity: toRows_(subActivityTotals),
+    byTeamMember: toRows_(teamTotals)
+  };
+}
+
+### Project1.gs :: getProject1MonthlySummary
+function getProject1MonthlySummary(month) {
+  requireUserRole_(['ADMIN', 'MANAGER', 'STAFF', 'VIEWER']);
+  var monthKey = month || Utilities.formatDate(new Date(),
+    AVODAH_CONFIG.TIME_ZONE, 'yyyy-MM');
+  return project1MonthlySummaryCore_(
+    getObjectRows_('Project 1 Activity Database'), monthKey, {});
+}
+
+### Project1.gs :: project1TestPayload_
+function project1TestPayload_(mapping, index, agentCode, activityDate) {
+  var fields = {};
+  mapping.requiredFields.forEach(function(fieldKey) {
+    var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+    if (definition.inputType === 'date') fields[fieldKey] = project1DateKey_(activityDate);
+    else if (definition.inputType === 'time') fields[fieldKey] = '09:00';
+    else if (definition.inputType === 'url') {
+      fields[fieldKey] = 'https://example.com/avodah-test-proof/' + index;
+    } else if (fieldKey === 'examResult') fields[fieldKey] = 'Passed';
+    else if (fieldKey === 'interviewStatus') fields[fieldKey] = 'Completed';
+    else if (fieldKey === 'interviewResult') fields[fieldKey] = 'Proceed';
+    else if (fieldKey === 'contactResult') fields[fieldKey] = 'Reached';
+    else fields[fieldKey] = 'TEST ' + definition.label + ' ' + index;
+  });
+  return {
+    activity_date: project1DateKey_(activityDate),
+    agent_code: agentCode,
+    team_member: project1TeamMemberOptions_()[0] || 'TEST Project 1 Agent',
+    activity_type: mapping.activityType,
+    sub_activity: mapping.subActivity,
+    fields: fields,
+    proof_url: fields.proofUrl || '',
+    notes: 'Automated TEST Project 1 lifecycle fixture'
+  };
+}
+
+### Project1.gs :: runProject1ValidationTests
+function runProject1ValidationTests() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  var tests = [];
+  var mappings = getProject1PointMapping_();
+  testAssert_(tests, '18 active Project 1 mappings', mappings.length === 18);
+  testAssert_(tests, 'Project 1 point total is 41', mappings.reduce(function(sum, item) {
+    return sum + item.points;
+  }, 0) === 41);
+  AVODAH_PROJECT1_ACTIVITY_SEEDS.forEach(function(seed) {
+    var mapping = mappings.filter(function(item) {
+      return project1MappingKey_(item.activityType, item.subActivity) ===
+        project1MappingKey_(seed[0], seed[1]);
+    })[0];
+    testAssert_(tests, seed[0] + ' / ' + seed[1] + ' points',
+      Boolean(mapping) && mapping.points === Number(seed[2]));
+  });
+  var uniqueKeys = mappings.map(function(item) {
+    return project1MappingKey_(item.activityType, item.subActivity);
+  });
+  testAssert_(tests, 'mapping keys are unique', uniqueKeys.length ===
+    uniqueKeys.filter(function(key, index) { return uniqueKeys.indexOf(key) === index; }).length);
+  testAssert_(tests, 'Week 1 bucket', project1ReportingWeek_('2026-07-07') === 'Week 1');
+  testAssert_(tests, 'Week 2 bucket', project1ReportingWeek_('2026-07-08') === 'Week 2');
+  testAssert_(tests, 'Week 3 bucket', project1ReportingWeek_('2026-07-15') === 'Week 3');
+  testAssert_(tests, 'Week 4 bucket', project1ReportingWeek_('2026-07-22') === 'Week 4');
+  var proofMapping = mappings.filter(function(item) {
+    return item.requiredFields.indexOf('proofUrl') !== -1;
+  })[0];
+  var missingProof = project1TestPayload_(proofMapping, 900, 'TEST-VALIDATION',
+    '2026-07-22');
+  missingProof.proof_url = '';
+  delete missingProof.fields.proofUrl;
+  testAssert_(tests, 'proof-required activity rejects missing proof',
+    testErrorCode_(function() { validateProject1Submission_(missingProof); }) ===
+      'PROOF_REQUIRED');
+  var invalidPair = project1TestPayload_(mappings[0], 901, 'TEST-VALIDATION',
+    '2026-07-22');
+  invalidPair.activity_type = 'Sales';
+  testAssert_(tests, 'type and sub-activity relationship enforced',
+    testErrorCode_(function() { validateProject1Submission_(invalidPair); }) ===
+      'PROJECT1_MAPPING_NOT_FOUND');
+  var synthetic = mappings.map(function(item, index) {
+    return {record: {
+      'Reporting Month': '2026-07',
+      'Record Status': 'ACTIVE',
+      'Agent Code': 'TEST-SUMMARY',
+      'Team Member': 'TEST Project 1 Agent',
+      'Activity Type': item.activityType,
+      'Sub-Activity': item.subActivity,
+      'Points': item.points
+    }};
+  });
+  var summary = project1MonthlySummaryCore_(synthetic, '2026-07',
+    {agentCode: 'TEST-SUMMARY'});
+  testAssert_(tests, 'monthly summary counts all mappings', summary.records === 18);
+  testAssert_(tests, 'monthly total equals 41', summary.totalPoints === 41);
+  testAssert_(tests, 'analytics groups three activity types',
+    summary.byActivityType.length === 3);
+  testAssert_(tests, 'P1 ID prefix available',
+    generateUniqueId_('PROJECT1').indexOf('P1-') === 0);
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {passed: failures.length === 0, tests: tests, failures: failures};
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### Project1.gs :: runProject1LifecycleIntegrationTest
+function runProject1LifecycleIntegrationTest() {
+  var user = requireUserRole_(['ADMIN']);
+  assertProject1WritesEnabled_();
+  var mappings = getProject1PointMapping_();
+  var suffix = Utilities.formatDate(new Date(), AVODAH_CONFIG.TIME_ZONE,
+    'yyyyMMddHHmmss');
+  var agentCode = 'TEST-P1-' + suffix;
+  var activityDate = new Date();
+  var tests = [];
+  var created = [];
+  mappings.forEach(function(mapping, index) {
+    var payload = project1TestPayload_(mapping, index + 1, agentCode, activityDate);
+    var result = submitProject1Activity_(payload, {
+      user: user,
+      source: 'PROJECT1_INTEGRATION_TEST',
+      requestId: Utilities.getUuid()
+    });
+    created.push({payload: payload, result: result, mapping: mapping});
+    testAssert_(tests, mapping.activityType + ' / ' + mapping.subActivity,
+      result.ok && result.points === mapping.points &&
+      String(result.activity_id || '').indexOf('P1-') === 0);
+  });
+  var duplicate = submitProject1Activity_(created[0].payload, {
+    user: user,
+    source: 'PROJECT1_INTEGRATION_TEST',
+    requestId: Utilities.getUuid()
+  });
+  testAssert_(tests, 'duplicate warning blocks unconfirmed repeat',
+    !duplicate.ok && duplicate.code === 'DUPLICATE_CONFIRMATION_REQUIRED');
+  var proofMapping = mappings.filter(function(item) {
+    return item.requiredFields.indexOf('proofUrl') !== -1;
+  })[0];
+  var missingProof = project1TestPayload_(proofMapping, 999,
+    agentCode + '-MISSING-PROOF', activityDate);
+  missingProof.proof_url = '';
+  delete missingProof.fields.proofUrl;
+  testAssert_(tests, 'live proof validation rejects missing proof',
+    testErrorCode_(function() {
+      submitProject1Activity_(missingProof, {user: user,
+        source: 'PROJECT1_INTEGRATION_TEST'});
+    }) === 'PROOF_REQUIRED');
+  var rows = getObjectRows_('Project 1 Activity Database').filter(function(item) {
+    return String(item.record['Agent Code'] || '') === agentCode;
+  });
+  testAssert_(tests, 'one row written for every mapping', rows.length === 18);
+  testAssert_(tests, 'all rows use the expected reporting week', rows.every(function(item) {
+    return item.record['Reporting Week'] === project1ReportingWeek_(activityDate);
+  }));
+  var summary = project1MonthlySummaryCore_(rows,
+    project1ReportingMonth_(activityDate), {agentCode: agentCode});
+  testAssert_(tests, 'live monthly total is 41', summary.totalPoints === 41);
+  testAssert_(tests, 'live analytics groups all three activity types',
+    summary.byActivityType.length === 3);
+  var failures = tests.filter(function(test) { return !test.passed; });
+  var result = {
+    passed: failures.length === 0,
+    tests: tests,
+    failures: failures,
+    agentCode: agentCode,
+    activityIds: created.map(function(item) { return item.result.activity_id; }),
+    rowsWritten: rows.length,
+    totalPoints: summary.totalPoints
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+### Setup.gs :: seedDefaultSettings_
+function seedDefaultSettings_() {
+  var existingRows = readSettingsRows_();
+  var existingKeys = {};
+  existingRows.forEach(function(row) {
+    existingKeys[row.group.toUpperCase() + '|' + row.key.toUpperCase()] = true;
+  });
+  var seeded = 0;
+  var versionResult = upsertSettingRow_('SYSTEM', 'FOUNDATION_VERSION',
+    AVODAH_CONFIG.VERSION, 'text', true, 20,
+    'Last foundation schema version applied.');
+  existingKeys['SYSTEM|FOUNDATION_VERSION'] = true;
+  if (versionResult.created) seeded += 1;
+  AVODAH_SETTING_SEEDS.forEach(function(seed) {
+    var composite = String(seed[0]).toUpperCase() + '|' + String(seed[1]).toUpperCase();
+    if (existingKeys[composite]) return;
+    upsertSettingRow_(seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6]);
+    existingKeys[composite] = true;
+    seeded += 1;
+  });
+  AVODAH_PROJECT1_ACTIVITY_SEEDS.forEach(function(activity, index) {
+    var key = activity[0] + ' | ' + activity[1];
+    var composite = 'PROJECT1_ACTIVITY|' + key.toUpperCase();
+    if (existingKeys[composite]) return;
+    var payload = {
+      activityType: activity[0],
+      subActivity: activity[1],
+      points: activity[2],
+      requiredFields: activity[3]
+    };
+    upsertSettingRow_('PROJECT1_ACTIVITY', key, safeJsonStringify_(payload),
+      'json', true, (index + 1) * 10,
+      'README point mapping. Required fields must be re-confirmed before production.');
+    existingKeys[composite] = true;
+    seeded += 1;
+  });
+  return seeded;
+}
+
+### Setup.gs :: runDeploymentReadinessAudit
+function runDeploymentReadinessAudit() {
+  requireUserRole_(['ADMIN', 'MANAGER']);
+  var verification = verifyConfiguration_();
+  var properties = PropertiesService.getScriptProperties();
+  var gateNames = [
+    'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+    'ENABLE_RECRUITMENT_WRITES', 'ENABLE_ANALYTICS_WRITES',
+    'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+    'PUBLIC_PORTAL_ENABLED', 'ENABLE_AUTOMATION_TRIGGERS'
+  ];
+  var gates = {};
+  gateNames.forEach(function(name) {
+    gates[name] = truthy_(properties.getProperty(name));
+  });
+
+  var roleCounts = {ADMIN: 0, MANAGER: 0, STAFF: 0, VIEWER: 0, OTHER: 0};
+  getActiveSettingsByGroupSafe_('USER_ROLE').forEach(function(row) {
+    var role = String(row.value || '').trim().toUpperCase();
+    if (Object.prototype.hasOwnProperty.call(roleCounts, role)) roleCounts[role] += 1;
+    else roleCounts.OTHER += 1;
+  });
+
+  var triggerValidation = validateRequiredTriggerDefinitions_();
+  var configuredDeploymentId = String(properties.getProperty('DEPLOYMENT_ID') || '')
+    .trim();
+  var webAppUrl = '';
+  var webAppUrlSource = 'NONE';
+  if (/^[A-Za-z0-9_-]{20,200}$/.test(configuredDeploymentId)) {
+    webAppUrl = 'https://script.google.com/macros/s/' + configuredDeploymentId +
+      '/exec';
+    webAppUrlSource = 'DEPLOYMENT_ID';
+  } else {
+    try {
+      webAppUrl = String(ScriptApp.getService().getUrl() || '');
+      if (webAppUrl) webAppUrlSource = 'SCRIPT_SERVICE';
+    } catch (ignored) {}
+  }
+  var webAppProbe = {
+    reachable: false,
+    httpStatus: 0,
+    responseMode: 'NOT_DEPLOYED',
+    reportedVersion: '',
+    currentVersion: false,
+    urlSource: webAppUrlSource
+  };
+  if (webAppUrl) {
+    try {
+      var webResponse = UrlFetchApp.fetch(webAppUrl +
+        (webAppUrl.indexOf('?') === -1 ? '?' : '&') +
+        'readiness_probe=' + encodeURIComponent(String(new Date().getTime())), {
+        method: 'get',
+        followRedirects: true,
+        muteHttpExceptions: true
+      });
+      webAppProbe.httpStatus = Number(webResponse.getResponseCode() || 0);
+      var webBody = String(webResponse.getContentText() || '').substring(0, 2000);
+      webAppProbe.reachable = webAppProbe.httpStatus >= 200 &&
+        webAppProbe.httpStatus < 400;
+      try {
+        var webJson = JSON.parse(webBody);
+        webAppProbe.responseMode = webJson && webJson.service ?
+          'LEGACY_STATUS_JSON' : 'JSON';
+        webAppProbe.reportedVersion = String(webJson && webJson.version || '');
+      } catch (ignoredJson) {
+        if (/accounts\.google\.com|sign in/i.test(webBody)) {
+          webAppProbe.responseMode = 'AUTH_REQUIRED_HTML';
+        } else if (/avodah/i.test(webBody)) {
+          webAppProbe.responseMode = 'AVODAH_HTML';
+        } else {
+          webAppProbe.responseMode = /<!doctype html|<html/i.test(webBody) ?
+            'HTML' : 'NON_JSON';
+        }
+      }
+      var expectedWebVersion = typeof PRODUCTION_VERSION !== 'undefined' ?
+        String(PRODUCTION_VERSION) : String(AVODAH_CONFIG.VERSION);
+      webAppProbe.currentVersion = Boolean(webAppProbe.reportedVersion) &&
+        webAppProbe.reportedVersion === expectedWebVersion;
+    } catch (ignoredFetch) {
+      webAppProbe.responseMode = 'FETCH_FAILED';
+    }
+  }
+  var installed = ScriptApp.getProjectTriggers().map(function(trigger) {
+    return {
+      handler: trigger.getHandlerFunction(),
+      eventType: String(trigger.getEventType()),
+      source: String(trigger.getTriggerSource())
+    };
+  });
+  var blockers = verification.configurationGates.slice();
+  if (verification.environment !== 'PRODUCTION') blockers.push('ENVIRONMENT_NOT_PRODUCTION');
+  if (!properties.getProperty('DEPLOYMENT_ID')) blockers.push('DEPLOYMENT_ID_NOT_RECORDED');
+  if (!webAppUrl) blockers.push('WEB_APP_NOT_DEPLOYED');
+  if (webAppUrl && !webAppProbe.reachable) blockers.push('WEB_APP_UNREACHABLE');
+  if (webAppProbe.reachable && !webAppProbe.reportedVersion) {
+    blockers.push('DEPLOYED_VERSION_NOT_VERIFIED');
+  } else if (webAppProbe.reachable && !webAppProbe.currentVersion) {
+    blockers.push('DEPLOYED_VERSION_NOT_CURRENT');
+  }
+  if (!triggerValidation.valid) blockers.push('TRIGGER_DEFINITIONS_INVALID');
+  if (roleCounts.ADMIN < 1) blockers.push('ADMIN_ROLE_MISSING');
+  if (!properties.getProperty('BOOKING_MANAGEMENT_BASE_URL')) {
+    blockers.push('BOOKING_MANAGEMENT_URL_NOT_CONFIGURED');
+  }
+  if (String(properties.getProperty('WEBHOOK_SECRET') || '').length < 24) {
+    blockers.push('[REDACTED_LONG_TOKEN]');
+  }
+  if (!gates.PUBLIC_PORTAL_ENABLED) blockers.push('PUBLIC_PORTAL_DISABLED');
+
+  var result = {
+    version: AVODAH_CONFIG.VERSION,
+    generatedAt: new Date().toISOString(),
+    environment: verification.environment,
+    spreadsheet: verification.spreadsheet,
+    sheets: {
+      required: verification.sheets.length,
+      present: verification.sheets.filter(function(item) { return item.exists; }).length,
+      missing: verification.sheets.filter(function(item) { return
+
+### Validation.gs :: applyFoundationValidations_
+function applyFoundationValidations_() {
+  var results = [];
+  results.push(ensureListValidationForColumn_('Calendar Log', 'Owner',
+    settingValues_('TEAM_MEMBER')));
+  results.push(ensureListValidationForColumn_('Calendar Log', 'Status',
+    settingValues_('CALENDAR_STATUS')));
+  results.push(ensureListValidationForColumn_('Calendar Log', 'Category',
+    settingValues_('CALENDAR_CATEGORY')));
+  results.push(ensureListValidationForColumn_('Lead Database', 'Lead Status',
+    settingValues_('LEAD_STATUS')));
+  results.push(ensureListValidationForColumn_('Lead Database', 'Follow-up Status',
+    settingValues_('FOLLOW_UP_STATUS')));
+  results.push(ensureListValidationForColumn_('Applicant Tracking', 'Current Stage',
+    settingValues_('RECRUITMENT_STAGE')));
+  results.push(ensureListValidationForColumn_('Applicant Tracking', 'Current Status',
+    settingValues_('RECRUITMENT_STATUS')));
+  results.push(ensureListValidationForColumn_('Applicant Tracking', 'Record Status',
+    ['ACTIVE', 'VOID']));
+  results.push(ensureListValidationForColumn_('Interview Records', 'Interview Type',
+    settingValues_('INTERVIEW_TYPE')));
+  results.push(ensureListValidationForColumn_('Interview Records', 'Interview Status',
+    settingValues_('INTERVIEW_STATUS')));
+  results.push(ensureListValidationForColumn_('Interview Records', 'Interview Result',
+    settingValues_('INTERVIEW_RESULT')));
+  results.push(ensureListValidationForColumn_('Requirements Tracker', 'Status',
+    settingValues_('REQUIREMENT_STATUS')));
+  results.push(ensureListValidationForColumn_('Onboarding Tracker', 'Status',
+    settingValues_('ONBOARDING_STATUS')));
+  ['Communication Score', 'Customer Service Score', 'Selling Background Score',
+    'Quota Experience Score', 'Handling Objections Score',
+    'Appointment Strategy Score', 'Overall Score'].forEach(function(header) {
+    results.push(ensureNumberRangeValidationForColumn_(
+      'Interview Records', header, 1, 5));
+  });
+  ['Application Date', 'Initial Interview Date', 'Final Interview Date'].forEach(
+    function(header) {
+      results.push(ensureDateValidationForColumn_('Applicant Tracking', header));
+    });
+  ['Scheduled Start', 'Scheduled End'].forEach(function(header) {
+    results.push(ensureDateTimeValidationForColumn_('Interview Records', header));
+  });
+  ['Submitted At', 'Verified At'].forEach(function(header) {
+    results.push(ensureDateTimeValidationForColumn_('Requirements Tracker', header));
+  });
+  results.push(ensureDateValidationForColumn_('Onboarding Tracker', 'Due Date'));
+  results.push(ensureDateTimeValidationForColumn_('Onboarding Tracker', 'Completed At'));
+  results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+    'Activity Type', project1ActivityTypes_()));
+  results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+    'Sub-Activity', project1SubActivities_()));
+  results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+    'Team Member', project1TeamMemberOptions_()));
+  results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+    'Record Status', ['ACTIVE', 'VOID']));
+  results.push(ensureDateValidationForColumn_('Project 1 Activity Database',
+    'Activity Date'));
+  return results.filter(function(result) { return result != null; });
+}
+
+## Matched source lines
+Analytics.gs:13: 'Project 1 Performance Analytics'
+Analytics.gs:48: written += replaceDerivedRows_('Project 1 Performance Analytics',
+Analytics.gs:49: snapshot.project1.metricRows, 4);
+Analytics.gs:66: project1: snapshot.project1.metricRows.length
+Analytics.gs:259: project1PointsThisMonth: snapshot.project1.cards.currentMonthPoints
+Analytics.gs:265: project1PointsByType: snapshot.project1.breakdowns.pointsByType
+Analytics.gs:277: project1: analyticsSourceRecords_('Project 1 Activity Database', ['Activity ID'])
+Analytics.gs:287: project1: buildProject1AnalyticsCore_(source.project1, generatedAt)
+Analytics.gs:290: source.bookings.length + source.calendar.length + source.project1.length;
+Analytics.gs:453: function buildProject1AnalyticsCore_(rows, asOf) {
+Analytics.gs:535: ['Project 1', snapshot.project1.metricRows]
+Analytics.gs:571: ['PROJECT1_ANALYTICS', 'Project 1 Performance Analytics', 'CURRENT',
+Analytics.gs:930: var project1 = buildProject1AnalyticsCore_([
+Analytics.gs:938: analyticsTestAssert_(tests, 'Project 1 totals exclude void activities',
+Analytics.gs:939: project1.cards.totalActivities === 2 && project1.cards.totalPoints === 5);
+Analytics.gs:940: analyticsTestAssert_(tests, 'Project 1 current-month points are grouped',
+Analytics.gs:941: project1.cards.currentMonthPoints === 5 &&
+Analytics.gs:942: project1.breakdowns.pointsByType.length === 2);
+Analytics.gs:984: analyticsTestAssert_(tests, 'Project 1 analytics rows match the source-backed model',
+Analytics.gs:985: first.analyticsRows.project1 === snapshot.project1.metricRows.length);
+Analytics.gs:1015: ['Project 1 Activity Database', null]
+Code.gs:2463: if (/AVODAH|JOB INTERVIEW|FINAL INTERVIEW|INTERVIEW|ORIENTATION|PAYROLL|PASS REPORT|PROJECT 1|ERECRUITMENT|E-RECRUITMENT|\bGAS\b|RECRUIT|OONA/.test(value)) return "Avodah";
+Code.gs:2863: const project1WritesEnabled = String(properties.getProperty("ENABLE_PROJECT1_WRITES") || "")
+Code.gs:2890: if (!project1WritesEnabled) warnings.push("Project 1 writes are disabled by default.");
+Code.gs:2910: project1_writes_enabled: project1WritesEnabled,
+Config.gs:28: 'ENABLE_PROJECT1_WRITES',
+Config.gs:44: PROJECT1: 'P1',
+Config.gs:50: TRANSITIONAL_AUDIT_SHEET: 'Activity Audit Log',
+Config.gs:165: name: 'Project 1 Activity Database',
+Config.gs:169: 'Team Member', 'Activity Type', 'Sub-Activity', 'Points',
+Config.gs:178: name: 'Activity Audit Log',
+Config.gs:217: name: 'Project 1 Performance Analytics',
+Config.gs:361: var AVODAH_PROJECT1_ACTIVITY_SEEDS = Object.freeze([
+Config.gs:384: ['Sales', 'Application Submitted', 3, ['clientName', 'activityDate', 'proofUrl']],
+Dashboard.gs:74: 'Calendar Log, Project 1 Activity Database';
+Dashboard.gs:91: label: 'PROJECT 1 POINTS - ' + snapshot.monthKey,
+Dashboard.gs:92: value: snapshot.project1.cards.currentMonthPoints,
+Dashboard.gs:93: note: 'Active Project 1 points whose activity date falls in the displayed month.'}
+Dashboard.gs:113: {header: 'J53:L53', label: 'PROJECT 1 POINTS BY TYPE', startColumn: 10,
+Dashboard.gs:114: rows: snapshot.project1.breakdowns.pointsByType}
+FoundationTests.gs:27: testAssert_(tests, 'README Project 1 mapping count',
+FoundationTests.gs:28: AVODAH_PROJECT1_ACTIVITY_SEEDS.length === 18);
+FoundationTests.gs:29: var pointSum = AVODAH_PROJECT1_ACTIVITY_SEEDS.reduce(function(sum, row) {
+FoundationTests.gs:32: testAssert_(tests, 'README Project 1 point total', pointSum === 41);
+FoundationTests.gs:376: 'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+FoundationTests.gs:527: ['Project 1', runProject1ValidationTests],
+Project1.gs:1: /** Project 1 controlled mappings, validation, submission, and summaries. */
+Project1.gs:3: var AVODAH_PROJECT1_FIELD_DEFINITIONS = Object.freeze({
+Project1.gs:25: function project1MappingKey_(activityType, subActivity) {
+Project1.gs:27: String(subActivity || '').trim().toLowerCase();
+Project1.gs:30: function getProject1PointMapping_() {
+Project1.gs:32: return getActiveSettingsByGroupSafe_('PROJECT1_ACTIVITY').map(function(row) {
+Project1.gs:34: if (!item || !item.activityType || !item.subActivity ||
+Project1.gs:37: throw avodahError_('PROJECT1_MAPPING_INVALID',
+Project1.gs:38: 'Invalid PROJECT1_ACTIVITY configuration row: ' + row.key);
+Project1.gs:40: var key = project1MappingKey_(item.activityType, item.subActivity);
+Project1.gs:42: throw avodahError_('PROJECT1_MAPPING_DUPLICATE',
+Project1.gs:44: ' / ' + item.subActivity + '.');
+Project1.gs:47: if (!AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey]) {
+Project1.gs:48: throw avodahError_('PROJECT1_FIELD_UNKNOWN',
+Project1.gs:49: 'Unknown Project 1 required field: ' + fieldKey);
+Project1.gs:55: subActivity: String(item.subActivity).trim(),
+Project1.gs:63: function project1ActivityTypes_() {
+Project1.gs:64: return getProject1PointMapping_().map(function(item) {
+Project1.gs:71: function project1SubActivities_() {
+Project1.gs:72: return getProject1PointMapping_().map(function(item) {
+Project1.gs:73: return item.subActivity;
+Project1.gs:79: function project1TeamMemberOptions_() {
+Project1.gs:87: function findProject1Mapping_(activityType, subActivity) {
+Project1.gs:88: var key = project1MappingKey_(activityType, subActivity);
+Project1.gs:89: return getProject1PointMapping_().filter(function(item) {
+Project1.gs:90: return project1MappingKey_(item.activityType, item.subActivity) === key;
+Project1.gs:94: function assertProject1WritesEnabled_() {
+Project1.gs:97: 'This Project 1 package is restricted to the copied TEST environment.');
+Project1.gs:102: 'Project 1 writes require a spreadsheet whose title begins with TEST.');
+Project1.gs:105: .getProperty('ENABLE_PROJECT1_WRITES') || '').trim().toUpperCase();
+Project1.gs:107: throw avodahError_('PROJECT1_WRITES_DISABLED',
+Project1.gs:108: 'Set ENABLE_PROJECT1_WRITES=TRUE only for an approved TEST transaction.');
+Project1.gs:112: function project1Date_(value, fieldName) {
+Project1.gs:130: throw avodahError_('INVALID_PROJECT1_DATE',
+Project1.gs:136: function project1DateKey_(value) {
+Project1.gs:137: return Utilities.formatDate(project1Date_(value, 'Activity Date'),
+Project1.gs:141: function project1ReportingWeek_(value) {
+Project1.gs:142: var day = Number(Utilities.formatDate(project1Date_(value, 'Activity Date'),
+Project1.gs:144: if (day <= 7) return 'Week 1';
+Project1.gs:145: if (day <= 14) return 'Week 2';
+Project1.gs:146: if (day <= 21) return 'Week 3';
+Project1.gs:147: return 'Week 4';
+Project1.gs:150: function project1ReportingMonth_(value) {
+Project1.gs:151: return Utilities.formatDate(project1Date_(value, 'Activity Date'),
+Project1.gs:155: function project1MonthValue_(value) {
+Project1.gs:166: function project1NormalizeField_(fieldKey, value) {
+Project1.gs:167: var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+Project1.gs:169: throw avodahError_('PROJECT1_FIELD_UNKNOWN',
+Project1.gs:170: 'Unknown Project 1 field: ' + fieldKey);
+Project1.gs:175: return project1DateKey_(value);
+Project1.gs:179: throw avodahError_('INVALID_PROJECT1_TIME',
+Project1.gs:194: function project1RequiredData_(mapping, payload) {
+Project1.gs:197: throw avodahError_('INVALID_PROJECT1_FIELDS',
+Project1.gs:198: 'Project 1 fields must be provided as an object.');
+Project1.gs:205: var normalized = project1NormalizeField_(fieldKey, value);
+Project1.gs:208: 'PROJECT1_FIELD_REQUIRED',
+Project1.gs:209: AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey].label + ' is required.',
+Project1.gs:218: function project1StatusSummary_(mapping, data) {
+Project1.gs:239: return statuses[mapping.subActivity] || 'Completed';
+Project1.gs:242: function project1Fingerprint_(payload, mapping, requiredData, activityDate) {
+Project1.gs:249: project1DateKey_(activityDate),
+Project1.gs:251: mapping.subActivity.toLowerCase(),
+Project1.gs:259: function findActiveProject1Duplicate_(fingerprint) {
+Project1.gs:260: return getObjectRows_('Project 1 Activity Database').filter(function(item) {
+Project1.gs:266: function validateProject1Submission_(payload) {
+Project1.gs:268: var activityDate = project1Date_(input.activity_date, 'Activity Date');
+Project1.gs:273: var teamOptions = project1TeamMemberOptions_();
+Project1.gs:280: var mapping = findProject1Mapping_(input.activity_type, input.sub_activity);
+Project1.gs:282: throw avodahError_('PROJECT1_MAPPING_NOT_FOUND',
+Project1.gs:283: 'Activity Type and Sub-Activity must match one active controlled mapping.');
+Project1.gs:285: var required = project1RequiredData_(mapping, input);
+Project1.gs:297: function project1AuditSafe_(event) {
+Project1.gs:303: handler: 'project1AuditSafe_',
+Project1.gs:313: function formatProject1ActivityRow_(rowNumber) {
+Project1.gs:314: var context = getTableContext_('Project 1 Activity Database');
+Project1.gs:321: function submitProject1Activity(payload) {
+Project1.gs:323: return submitProject1Activity_(payload, {
+Project1.gs:330: function submitProject1Activity_(payload, options) {
+Project1.gs:331: assertProject1WritesEnabled_();
+Project1.gs:334: return withScriptLock_('submitProject1Activity', function() {
+Project1.gs:335: var validated = validateProject1Submission_(payload);
+Project1.gs:337: var fingerprint = project1Fingerprint_(payload, mapping,
+Project1.gs:339: var duplicate = findActiveProject1Duplicate_(fingerprint);
+Project1.gs:344: message: 'A matching Project 1 activity already exists.',
+Project1.gs:351: var activityId = generateUniqueId_('PROJECT1');
+Project1.gs:353: var rowNumber = appendObjectRow_('Project 1 Activity Database', {
+Project1.gs:360: 'Sub-Activity': mapping.subActivity,
+Project1.gs:366: 'Status Summary': project1StatusSummary_(mapping, validated.requiredData),
+Project1.gs:367: 'Reporting Week': project1ReportingWeek_(validated.activityDate),
+Project1.gs:368: 'Reporting Month': project1ReportingMonth_(validated.activityDate),
+Project1.gs:374: formatProject1ActivityRow_(rowNumber);
+Project1.gs:376: var auditWritten = project1AuditSafe_({
+Project1.gs:379: action: 'PROJECT1_ACTIVITY_SUBMITTED',
+Project1.gs:380: entityType: 'PROJECT1_ACTIVITY',
+Project1.gs:386: subActivity: mapping.subActivity,
+Project1.gs:394: code: duplicate ? 'PROJECT1_CONFIRMED_DUPLICATE_CREATED' :
+Project1.gs:395: 'PROJECT1_ACTIVITY_CREATED',
+Project1.gs:399: reporting_week: project1ReportingWeek_(validated.activityDate),
+Project1.gs:400: reporting_month: project1ReportingMonth_(validated.activityDate),
+Project1.gs:407: function getProject1FormDefinition() {
+Project1.gs:410: getProject1PointMapping_().forEach(function(mapping) {
+Project1.gs:419: subActivity: mapping.subActivity,
+Project1.gs:422: var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+Project1.gs:431: .getProperty('ENABLE_PROJECT1_WRITES') || '').trim().toUpperCase() === 'TRUE',
+Project1.gs:433: teamMembers: project1TeamMemberOptions_(),
+Project1.gs:438: function project1MonthlySummaryCore_(rows, month, options) {
+Project1.gs:447: return project1MonthValue_(record['Reporting Month']) === monthKey &&
+Project1.gs:452: var subActivityTotals = {};
+Project1.gs:460: var sub = type + ' | ' + String(record['Sub-Activity'] || 'Unspecified');
+Project1.gs:463: subActivityTotals[sub] = (subActivityTotals[sub] || 0) + points;
+Project1.gs:476: bySubActivity: toRows_(subActivityTotals),
+Project1.gs:481: function getProject1MonthlySummary(month) {
+Project1.gs:485: return project1MonthlySummaryCore_(
+Project1.gs:486: getObjectRows_('Project 1 Activity Database'), monthKey, {});
+Project1.gs:489: function project1TestPayload_(mapping, index, agentCode, activityDate) {
+Project1.gs:492: var definition = AVODAH_PROJECT1_FIELD_DEFINITIONS[fieldKey];
+Project1.gs:493: if (definition.inputType === 'date') fields[fieldKey] = project1DateKey_(activityDate);
+Project1.gs:504: activity_date: project1DateKey_(activityDate),
+Project1.gs:506: team_member: project1TeamMemberOptions_()[0] || 'TEST Project 1 Agent',
+Project1.gs:508: sub_activity: mapping.subActivity,
+Project1.gs:511: notes: 'Automated TEST Project 1 lifecycle fixture'
+Project1.gs:515: function runProject1ValidationTests() {
+Project1.gs:518: var mappings = getProject1PointMapping_();
+Project1.gs:519: testAssert_(tests, '18 active Project 1 mappings', mappings.length === 18);
+Project1.gs:520: testAssert_(tests, 'Project 1 point total is 41', mappings.reduce(function(sum, item) {
+Project1.gs:523: AVODAH_PROJECT1_ACTIVITY_SEEDS.forEach(function(seed) {
+Project1.gs:525: return project1MappingKey_(item.activityType, item.subActivity) ===
+Project1.gs:526: project1MappingKey_(seed[0], seed[1]);
+Project1.gs:532: return project1MappingKey_(item.activityType, item.subActivity);
+Project1.gs:536: testAssert_(tests, 'Week 1 bucket', project1ReportingWeek_('2026-07-07') === 'Week 1');
+Project1.gs:537: testAssert_(tests, 'Week 2 bucket', project1ReportingWeek_('2026-07-08') === 'Week 2');
+Project1.gs:538: testAssert_(tests, 'Week 3 bucket', project1ReportingWeek_('2026-07-15') === 'Week 3');
+Project1.gs:539: testAssert_(tests, 'Week 4 bucket', project1ReportingWeek_('2026-07-22') === 'Week 4');
+Project1.gs:543: var missingProof = project1TestPayload_(proofMapping, 900, 'TEST-VALIDATION',
+Project1.gs:548: testErrorCode_(function() { validateProject1Submission_(missingProof); }) ===
+Project1.gs:550: var invalidPair = project1TestPayload_(mappings[0], 901, 'TEST-VALIDATION',
+Project1.gs:553: testAssert_(tests, 'type and sub-activity relationship enforced',
+Project1.gs:554: testErrorCode_(function() { validateProject1Submission_(invalidPair); }) ===
+Project1.gs:555: 'PROJECT1_MAPPING_NOT_FOUND');
+Project1.gs:561: 'Team Member': 'TEST Project 1 Agent',
+Project1.gs:563: 'Sub-Activity': item.subActivity,
+Project1.gs:567: var summary = project1MonthlySummaryCore_(synthetic, '2026-07',
+Project1.gs:569: testAssert_(tests, 'monthly summary counts all mappings', summary.records === 18);
+Project1.gs:574: generateUniqueId_('PROJECT1').indexOf('P1-') === 0);
+Project1.gs:581: function runProject1LifecycleIntegrationTest() {
+Project1.gs:583: assertProject1WritesEnabled_();
+Project1.gs:584: var mappings = getProject1PointMapping_();
+Project1.gs:592: var payload = project1TestPayload_(mapping, index + 1, agentCode, activityDate);
+Project1.gs:593: var result = submitProject1Activity_(payload, {
+Project1.gs:595: source: 'PROJECT1_INTEGRATION_TEST',
+Project1.gs:599: testAssert_(tests, mapping.activityType + ' / ' + mapping.subActivity,
+Project1.gs:603: var duplicate = submitProject1Activity_(created[0].payload, {
+Project1.gs:605: source: 'PROJECT1_INTEGRATION_TEST',
+Project1.gs:613: var missingProof = project1TestPayload_(proofMapping, 999,
+Project1.gs:619: submitProject1Activity_(missingProof, {user: user,
+Project1.gs:620: source: 'PROJECT1_INTEGRATION_TEST'});
+Project1.gs:622: var rows = getObjectRows_('Project 1 Activity Database').filter(function(item) {
+Project1.gs:627: return item.record['Reporting Week'] === project1ReportingWeek_(activityDate);
+Project1.gs:629: var summary = project1MonthlySummaryCore_(rows,
+Project1.gs:630: project1ReportingMonth_(activityDate), {agentCode: agentCode});
+Setup.gs:130: AVODAH_PROJECT1_ACTIVITY_SEEDS.forEach(function(activity, index) {
+Setup.gs:132: var composite = 'PROJECT1_ACTIVITY|' + key.toUpperCase();
+Setup.gs:136: subActivity: activity[1],
+Setup.gs:140: upsertSettingRow_('PROJECT1_ACTIVITY', key, safeJsonStringify_(payload),
+Setup.gs:262: 'ENABLE_BOOKING_WORKFLOW', 'ENABLE_PROJECT1_WRITES',
+Validation.gs:49: results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+Validation.gs:50: 'Activity Type', project1ActivityTypes_()));
+Validation.gs:51: results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+Validation.gs:52: 'Sub-Activity', project1SubActivities_()));
+Validation.gs:53: results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+Validation.gs:54: 'Team Member', project1TeamMemberOptions_()));
+Validation.gs:55: results.push(ensureListValidationForColumn_('Project 1 Activity Database',
+Validation.gs:57: results.push(ensureDateValidationForColumn_('Project 1 Activity Database',
