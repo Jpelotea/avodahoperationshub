@@ -1,0 +1,132 @@
+name: Inspect TEST UAT-05 Recruitment Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat05-recruitment-contract.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST source and inspect recruitment contract
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat05-recruitment-contract.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-05 recruitment contract inspection\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nwrite_operations_performed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Recruitment.gs
+          test -f src/Config.gs
+
+          STAGE="extract_contract"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const files = fs.readdirSync('src').filter(f => /\.gs$/.test(f));
+          const keywords = [
+            'Applicant Tracking','Interview Records','Applicant Timeline',
+            'Requirements Tracker','Onboarding Tracker','Recruitment Analytics',
+            'ENABLE_RECRUITMENT_WRITES','No Show','Rescheduled','Hired','Rejected',
+            'Withdrawn','Requirements','Onboarding','schedule','interview','applicant',
+            'recruitment'
+          ];
+
+          function functionNames(text) {
+            const names = [];
+            const re = /function\s+([A-Za-z0-9_$]+)\s*\(/g;
+            let m;
+            while ((m = re.exec(text))) names.push(m[1]);
+            return names;
+          }
+
+          const out = [
+            'TEST UAT-05 recruitment contract inspection',
+            'status=SUCCESS',
+            'write_operations_performed=no',
+            'production_touched=no',
+            ''
+          ];
+
+          for (const file of files) {
+            const text = fs.readFileSync(path.join('src', file), 'utf8');
+            if (!keywords.some(k => text.toLowerCase().includes(k.toLowerCase()))) continue;
+            const names = functionNames(text).filter(name => /applicant|interview|recruit|requirement|onboard|timeline|analytics|status|stage|decision|score|schedule|withdraw|reject|hire/i.test(name));
+            if (names.length) {
+              out.push('## ' + file + ' relevant functions');
+              names.forEach(name => out.push(name));
+              out.push('');
+            }
+            const lines = text.split(/\r?\n/);
+            const matched = [];
+            lines.forEach((line, i) => {
+              if (keywords.some(k => line.toLowerCase().includes(k.toLowerCase()))) {
+                matched.push(`${file}:${i + 1}: ${line.trim().slice(0, 700)}`);
+              }
+            });
+            if (matched.length) {
+              out.push('## ' + file + ' matched lines');
+              out.push(...matched.slice(0, 500));
+              out.push('');
+            }
+          }
+
+          let content = out.join('\n').replace(/[A-Za-z0-9_-]{40,}/g, '[REDACTED_LONG_TOKEN]');
+          if (Buffer.byteLength(content, 'utf8') > 500000) {
+            content = content.slice(0, 500000) + '\n[TRUNCATED]\n';
+          }
+          fs.writeFileSync('diagnostics/latest-test-uat05-recruitment-contract.txt', content);
+          NODE
+
+          STAGE="verify_report"
+          test -s "$REPORT"
+          grep -q '^status=SUCCESS$' "$REPORT"
+          STAGE="complete"
+
+      - name: Publish sanitized diagnostic
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat05-recruitment-contract.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-05 recruitment contract inspection\nstatus=FAILED\nfailed_stage=report_missing\nwrite_operations_performed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-05 recruitment contract inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-05 recruitment contract inspection" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
