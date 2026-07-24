@@ -1,0 +1,115 @@
+name: Fix TEST UAT-04 Reporting Month Normalization
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/fix-test-uat04-reporting-month-normalization.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Patch and verify TEST-only UAT runner
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/UAT04Manual.gs
+
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/UAT04Manual.gs';
+          let text = fs.readFileSync(path, 'utf8');
+          const oldText = "              uat04Assert_(String(row['Reporting Week'] || '') === expectedWeek &&\n                String(row['Reporting Month'] || '') === monthKey,\n                'UAT04_REPORTING_BUCKET_MISMATCH',\n                'The reporting week or month bucket is incorrect.');";
+          const newText = "              uat04Assert_(String(row['Reporting Week'] || '') === expectedWeek &&\n                project1MonthValue_(row['Reporting Month']) === monthKey,\n                'UAT04_REPORTING_BUCKET_MISMATCH',\n                'The reporting week or month bucket is incorrect.');";
+          let state = 'already_patched';
+          if (!text.includes(newText)) {
+            if (!text.includes(oldText)) throw new Error('Expected UAT-04 reporting bucket assertion not found.');
+            text = text.replace(oldText, newText);
+            state = 'changed';
+          }
+          if (!text.includes("project1MonthValue_(row['Reporting Month']) === monthKey")) {
+            throw new Error('Normalized reporting month comparison missing.');
+          }
+          if (text.includes("String(row['Reporting Month'] || '') === monthKey")) {
+            throw new Error('Obsolete raw reporting month comparison remains.');
+          }
+          fs.writeFileSync(path, text);
+          fs.writeFileSync('/tmp/patch-state.txt', state);
+          NODE
+
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/UAT04Manual.gs
+          grep -Fq "project1MonthValue_(row['Reporting Month']) === monthKey" verify-src/UAT04Manual.gs
+          if grep -Fq "String(row['Reporting Month'] || '') === monthKey" verify-src/UAT04Manual.gs; then
+            echo 'Obsolete raw reporting month comparison remains after pullback.' >&2
+            exit 1
+          fi
+
+          PATCH_STATE="$(cat /tmp/patch-state.txt)"
+          cat > diagnostics/latest-test-uat04-reporting-month-normalization-fix.txt <<EOF
+          TEST UAT-04 reporting month normalization fix
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          patch_state=${PATCH_STATE}
+          live_source_push=success
+          live_pullback_verification=success
+          runner_only_change=yes
+          product_source_changed=no
+          deployment_changed=no
+          script_properties_changed=no
+          spreadsheet_changed=no
+          calendar_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-reporting-month-normalization-fix.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 reporting month normalization fix" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 reporting month normalization fix" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
