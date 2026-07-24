@@ -1,0 +1,154 @@
+name: Fix TEST UAT-04 Notes Schema Migration V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/fix-test-uat04-notes-schema-migration-v2.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Patch TEST-only migration function
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-schema-migration-fix-v2.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-04 Notes schema migration fix V2\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nspreadsheet_changed_during_install=no\nscript_properties_changed=no\ngates_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_test_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/UAT04Manual.gs
+
+          STAGE="patch_migration_function"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'src/UAT04Manual.gs';
+          let text = fs.readFileSync(path, 'utf8');
+          const oldBlock = "  ensureSheetForDefinition_(spreadsheet, definition);\n  SpreadsheetApp.flush();\n  var context = getTableContext_('Project 1 Activity Database');";
+          const newBlock = "  var resolved = ensureSheetForDefinition_(spreadsheet, definition);\n  var appendedHeaders = appendMissingHeaders_(resolved.sheet, definition.headers, 1);\n  SpreadsheetApp.flush();\n  var context = getTableContext_('Project 1 Activity Database');";
+          const oldCount = text.split(oldBlock).length - 1;
+          const newCount = text.split(newBlock).length - 1;
+          let state = 'already_patched';
+          if (newCount === 0) {
+            if (oldCount !== 1) {
+              throw new Error('Expected exactly one old migration block; found ' + oldCount + '.');
+            }
+            text = text.replace(oldBlock, newBlock);
+            state = 'changed';
+          } else if (newCount !== 1 || oldCount !== 0) {
+            throw new Error('Unexpected mixed migration blocks.');
+          }
+
+          const oldResultLine = "    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),";
+          const newResultLine = "    appendedHeaders: appendedHeaders,\n    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),";
+          const oldResultCount = text.split(oldResultLine).length - 1;
+          const newResultCount = text.split(newResultLine).length - 1;
+          if (newResultCount === 0) {
+            if (oldResultCount !== 1) {
+              throw new Error('Expected exactly one migration result line; found ' + oldResultCount + '.');
+            }
+            text = text.replace(oldResultLine, newResultLine);
+          } else if (newResultCount !== 1 || oldResultCount !== 0) {
+            throw new Error('Unexpected mixed migration result lines.');
+          }
+
+          if (!text.includes('appendMissingHeaders_(resolved.sheet, definition.headers, 1)')) {
+            throw new Error('Correct header append helper is missing.');
+          }
+          fs.writeFileSync(path, text);
+          fs.writeFileSync('/tmp/patch-state.txt', state);
+          NODE
+
+          STAGE="syntax_check"
+          for f in src/*.gs; do node --check < "$f"; done
+
+          STAGE="push_live_test_source"
+          clasp push --force >/dev/null
+
+          STAGE="pullback_verification"
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/UAT04Manual.gs
+          grep -Fq 'appendMissingHeaders_(resolved.sheet, definition.headers, 1)' verify-src/UAT04Manual.gs
+          grep -Fq 'appendedHeaders: appendedHeaders' verify-src/UAT04Manual.gs
+          if grep -Fq 'ensureSheetForDefinition_(spreadsheet, definition);' verify-src/UAT04Manual.gs; then
+            echo 'Obsolete migration-only ensure call remains.' >&2
+            exit 1
+          fi
+
+          STAGE="write_success_report"
+          PATCH_STATE="$(cat /tmp/patch-state.txt)"
+          cat > "$REPORT" <<EOF
+          TEST UAT-04 Notes schema migration fix V2
+          status=SUCCESS
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          patch_state=${PATCH_STATE}
+          migration_helper=appendMissingHeaders_
+          live_source_push=success
+          live_pullback_verification=success
+          spreadsheet_changed_during_install=no
+          script_properties_changed=no
+          gates_changed=no
+          calendar_changed=no
+          deployment_changed=no
+          production_touched=no
+          EOF
+          STAGE="complete"
+
+      - name: Publish sanitized result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-schema-migration-fix-v2.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-04 Notes schema migration fix V2\nstatus=FAILED\nfailed_stage=report_missing\nspreadsheet_changed_during_install=no\nscript_properties_changed=no\ngates_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 Notes schema migration fix V2" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 Notes schema migration fix V2" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
