@@ -1,0 +1,15 @@
+TEST UAT-03 source-link clear fix V3
+commit=51d1ecbf7ddddfd0a97c821e03d3e25ff4efe2f9
+utc=2026-07-24T12:58:58Z
+patch_state=changed
+live_source_push=success
+live_pullback_verification=success
+intake_booking_id_clear=present
+intake_calendar_event_id_clear=present
+lead_booking_id_clear=present
+lead_calendar_event_id_clear=present
+deployment_changed=no
+script_properties_changed=no
+spreadsheet_changed=no
+calendar_changed=no
+production_touched=no
