@@ -1,0 +1,1190 @@
+TEST UAT-05 recruitment contract inspection
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+
+## Analytics.gs relevant functions
+assertAnalyticsWritesEnabled_
+refreshAnalyticsDashboard
+refreshAllAnalytics_
+runScheduledReportingRefresh_
+scheduledReportingFrequency_
+scheduledReportingPeriod_
+scheduledReportingFormulaState_
+scheduledReportingFormulaCount_
+scheduledReportingFormulaFingerprint_
+getScheduledReportingStatus
+buildAnalyticsSnapshot_
+analyticsSourceRecords_
+buildLeadAnalyticsCore_
+buildRecruitmentAnalyticsCore_
+buildBookingAnalyticsCore_
+buildProject1AnalyticsCore_
+analyticsValue_
+analyticsText_
+analyticsKey_
+analyticsNumber_
+analyticsRate_
+analyticsIsInactiveRecord_
+analyticsCountPresent_
+analyticsCountMatching_
+analyticsCountBy_
+analyticsSumBy_
+analyticsMapToRows_
+analyticsSum_
+analyticsMetricRow_
+analyticsAppendBreakdownRows_
+analyticsRecordMonth_
+analyticsMonthCellKey_
+runScheduledReportingValidationTests
+runScheduledDashboardTestTransaction
+runScheduledWeeklyTestTransaction
+runScheduledMonthlyTestTransaction
+runScheduledReportingCallbackTest_
+scheduledReportingRegistryIsCurrent_
+runAnalyticsValidationTests
+analyticsTestAssert_
+runAnalyticsTestTransaction
+analyticsSourceFingerprint_
+analyticsLegacyFingerprint_
+analyticsFingerprintRanges_
+analyticsDerivedSignature_
+analyticsMonthlySnapshotKeysAreUnique_
+
+## Analytics.gs matched lines
+Analytics.gs:11: 'Recruitment Analytics',
+Analytics.gs:44: written += replaceDerivedRows_('Recruitment Analytics',
+Analytics.gs:45: snapshot.recruitment.metricRows, 4);
+Analytics.gs:64: recruitment: snapshot.recruitment.metricRows.length,
+Analytics.gs:82: return runScheduledReportingRefresh_('DAILY');
+Analytics.gs:86: return runScheduledReportingRefresh_('WEEKLY');
+Analytics.gs:90: return runScheduledReportingRefresh_('MONTHLY');
+Analytics.gs:93: function runScheduledReportingRefresh_(frequency) {
+Analytics.gs:94: var kind = scheduledReportingFrequency_(frequency);
+Analytics.gs:96: var stateBefore = scheduledReportingFormulaState_();
+Analytics.gs:101: var formulaBefore = scheduledReportingFormulaFingerprint_();
+Analytics.gs:104: var formulaAfter = scheduledReportingFormulaFingerprint_();
+Analytics.gs:105: var stateAfter = scheduledReportingFormulaState_();
+Analytics.gs:108: 'A protected legacy report formula changed during scheduled reporting.');
+Analytics.gs:111: code: 'SCHEDULED_' + kind + '_REPORT_REFRESHED',
+Analytics.gs:115: period: scheduledReportingPeriod_(kind, startedAt),
+Analytics.gs:128: function scheduledReportingFrequency_(value) {
+Analytics.gs:137: function scheduledReportingPeriod_(frequency, value) {
+Analytics.gs:138: var kind = scheduledReportingFrequency_(frequency);
+Analytics.gs:141: throw avodahError_('INVALID_DATE', 'Invalid scheduled reporting date.');
+Analytics.gs:159: function scheduledReportingFormulaState_() {
+Analytics.gs:185: dailyFormulaCells: scheduledReportingFormulaCount_(dailyFormulas),
+Analytics.gs:186: weeklyFormulaCells: scheduledReportingFormulaCount_(weeklyFormulas),
+Analytics.gs:187: dashboardFormulaCells: scheduledReportingFormulaCount_(dashboardFormulas),
+Analytics.gs:195: function scheduledReportingFormulaCount_(rows) {
+Analytics.gs:201: function scheduledReportingFormulaFingerprint_() {
+Analytics.gs:222: function getScheduledReportingStatus() {
+Analytics.gs:235: daily: scheduledReportingPeriod_('DAILY', now),
+Analytics.gs:236: weekly: scheduledReportingPeriod_('WEEKLY', now),
+Analytics.gs:237: monthly: scheduledReportingPeriod_('MONTHLY', now)
+Analytics.gs:239: formulaViews: scheduledReportingFormulaState_(),
+Analytics.gs:257: activeApplicants: snapshot.recruitment.cards.activeApplicants,
+Analytics.gs:263: recruitmentStage: snapshot.recruitment.breakdowns.stage,
+Analytics.gs:274: applicants: analyticsSourceRecords_('Applicant Tracking', ['Applicant ID']),
+Analytics.gs:285: recruitment: buildRecruitmentAnalyticsCore_(source.applicants, generatedAt),
+Analytics.gs:289: snapshot.recordsRead = source.leads.length + source.applicants.length +
+Analytics.gs:348: function buildRecruitmentAnalyticsCore_(rows, asOf) {
+Analytics.gs:350: return analyticsText_(analyticsValue_(record, ['Applicant ID'])) !== '';
+Analytics.gs:355: var hired = analyticsCountMatching_(records, ['Current Status'], ['HIRED']);
+Analytics.gs:356: var noShow = analyticsCountMatching_(records, ['Current Status'], ['NO SHOW', 'NO_SHOW']);
+Analytics.gs:357: var requirementsComplete = analyticsCountMatching_(records,
+Analytics.gs:358: ['Requirements Status'], ['COMPLETE', 'COMPLETED']);
+Analytics.gs:359: var onboardingComplete = analyticsCountMatching_(records,
+Analytics.gs:360: ['Onboarding Status'], ['COMPLETE', 'COMPLETED']);
+Analytics.gs:364: analyticsMetricRow_('Applicant Count', 'All', records.length, asOf),
+Analytics.gs:365: analyticsMetricRow_('Applicant Count', 'Active', active.length, asOf),
+Analytics.gs:366: analyticsMetricRow_('Applicant Count', 'Hired', hired, asOf),
+Analytics.gs:367: analyticsMetricRow_('Applicant Count', 'No Show', noShow, asOf),
+Analytics.gs:368: analyticsMetricRow_('Applicant Count', 'Requirements Complete',
+Analytics.gs:369: requirementsComplete, asOf),
+Analytics.gs:370: analyticsMetricRow_('Applicant Count', 'Onboarding Complete',
+Analytics.gs:371: onboardingComplete, asOf),
+Analytics.gs:372: analyticsMetricRow_('Requirements Completion Rate', 'All Applicants',
+Analytics.gs:373: analyticsRate_(requirementsComplete, records.length), asOf),
+Analytics.gs:374: analyticsMetricRow_('Onboarding Completion Rate', 'All Applicants',
+Analytics.gs:375: analyticsRate_(onboardingComplete, records.length), asOf)
+Analytics.gs:378: analyticsAppendBreakdownRows_(metricRows, 'Recruitment Status Count', status, asOf);
+Analytics.gs:382: totalApplicants: records.length,
+Analytics.gs:383: activeApplicants: active.length,
+Analytics.gs:384: hiredApplicants: hired,
+Analytics.gs:385: noShowApplicants: noShow
+Analytics.gs:395: var activeStatuses = ['SCHEDULED', 'CONFIRMED', 'RESCHEDULED'];
+Analytics.gs:533: ['Recruitment', snapshot.recruitment.metricRows],
+Analytics.gs:567: ['RECRUITMENT_ANALYTICS', 'Recruitment Analytics', 'CURRENT', 'REFRESHED',
+Analytics.gs:748: function runScheduledReportingValidationTests() {
+Analytics.gs:752: var daily = scheduledReportingPeriod_('DAILY', now);
+Analytics.gs:753: var weekly = scheduledReportingPeriod_('WEEKLY', now);
+Analytics.gs:754: var monthly = scheduledReportingPeriod_('MONTHLY', now);
+Analytics.gs:757: var formulaState = scheduledReportingFormulaState_();
+Analytics.gs:776: names.indexOf('scheduledDailyReport') === -1);
+Analytics.gs:800: function runScheduledDashboardTestTransaction() {
+Analytics.gs:801: return runScheduledReportingCallbackTest_('DAILY', 'scheduledDashboardRefresh',
+Analytics.gs:802: scheduledDashboardRefresh);
+Analytics.gs:805: function runScheduledWeeklyTestTransaction() {
+Analytics.gs:806: return runScheduledReportingCallbackTest_('WEEKLY', 'scheduledWeeklyReport',
+Analytics.gs:807: scheduledWeeklyReport);
+Analytics.gs:810: function runScheduledMonthlyTestTransaction() {
+Analytics.gs:811: return runScheduledReportingCallbackTest_('MONTHLY', 'scheduledMonthlyReport',
+Analytics.gs:812: scheduledMonthlyReport);
+Analytics.gs:815: function runScheduledReportingCallbackTest_(frequency, handler, callback) {
+Analytics.gs:819: 'Scheduled reporting transaction tests run only in TEST.');
+Analytics.gs:823: var kind = scheduledReportingFrequency_(frequency);
+Analytics.gs:825: var formulasBefore = scheduledReportingFormulaFingerprint_();
+Analytics.gs:829: var formulasAfter = scheduledReportingFormulaFingerprint_();
+Analytics.gs:831: var expectedCode = 'SCHEDULED_' + kind + '_REPORT_REFRESHED';
+Analytics.gs:839: analyticsTestAssert_(tests, 'scheduled callback returns the expected code',
+Analytics.gs:841: analyticsTestAssert_(tests, 'scheduled callback remains bound to TEST',
+Analytics.gs:843: analyticsTestAssert_(tests, 'scheduled callback confirms formula preservation',
+Analytics.gs:845: analyticsTestAssert_(tests, 'scheduled callback reports the requested period',
+Analytics.gs:851: scheduledReportingRegistryIsCurrent_());
+Analytics.gs:862: action: 'SCHEDULED_REPORTING_TEST',
+Analytics.gs:872: function scheduledReportingRegistryIsCurrent_() {
+Analytics.gs:907: var recruitment = buildRecruitmentAnalyticsCore_([
+Analytics.gs:908: {'Applicant ID': 'A1', 'Current Stage': 'Screening', 'Current Status': 'New',
+Analytics.gs:910: {'Applicant ID': 'A2', 'Current Stage': 'Closed', 'Current Status': 'Hired',
+Analytics.gs:911: 'Requirements Status': 'Complete', 'Onboarding Status': 'Completed',
+Analytics.gs:914: analyticsTestAssert_(tests, 'recruitment keeps stage and status separate',
+Analytics.gs:915: recruitment.breakdowns.stage.length === 2 &&
+Analytics.gs:916: recruitment.breakdowns.status.length === 2);
+Analytics.gs:917: analyticsTestAssert_(tests, 'hired applicant count is status-based',
+Analytics.gs:918: recruitment.cards.hiredApplicants === 1);
+Analytics.gs:921: {'Booking ID': 'B1', 'Status': 'Scheduled', 'Google Event ID': 'E1',
+Analytics.gs:924: ], [{'Event ID': 'E1', 'Status': 'Scheduled'}], now);
+Analytics.gs:933: {'Activity ID': 'P2', 'Activity Date': now, 'Activity Type': 'Recruitment',
+Analytics.gs:980: analyticsTestAssert_(tests, 'recruitment analytics rows match the source-backed model',
+Analytics.gs:981: first.analyticsRows.recruitment === snapshot.recruitment.metricRows.length);
+Analytics.gs:1012: ['Applicant Tracking', null],
+
+## Bookings.gs relevant functions
+rescheduleConsultationBooking_
+
+## Bookings.gs matched lines
+Bookings.gs:4: Scheduled: true,
+Bookings.gs:6: Rescheduled: true
+Bookings.gs:162: 'Status': details.status || 'Scheduled',
+Bookings.gs:195: 'Status': status || 'Scheduled',
+Bookings.gs:423: appendCalendarLogBooking_(details, config, 'Scheduled');
+Bookings.gs:483: function rescheduleConsultationBooking_(payload, options) {
+Bookings.gs:486: return withScriptLock_('reschedule consultation booking', function() {
+Bookings.gs:487: return rescheduleConsultationBooking_(payload, Object.assign({}, context, {lockHeld: true}));
+Bookings.gs:520: 'Status': 'Rescheduled', 'Start': start, 'End': end, 'Meet Link': meetLink,
+Bookings.gs:534: if (log) updateCalendarLogBooking_(log, details, config, 'Rescheduled');
+Bookings.gs:535: else appendCalendarLogBooking_(details, config, 'Rescheduled');
+Bookings.gs:539: action: 'BOOKING_RESCHEDULED', previousValue: previous, newValue: start.toISOString(), result: 'SUCCESS'});
+Bookings.gs:540: return {ok: true, code: 'BOOKING_RESCHEDULED', http_status: 200, retryable: false,
+Bookings.gs:649: var eventStatus = event.status === 'cancelled' ? 'Cancelled' : String(record.Status || 'Scheduled');
+
+## Code.gs relevant functions
+updateCalendarLogForReschedule_
+getManagedBookingStatus_
+rescheduleManagedBooking_
+scheduledBookingReconciliation
+buildScheduleImportDuplicateIndex_
+scheduleImportSignature_
+previewMonthlyScheduleImport
+commitScheduleImportPreview
+parseScheduleCell_
+parseInterviewBlocks_
+parseSingleSchedulePart_
+buildScheduleEvent_
+classifyScheduleCategory_
+classifyScheduleActivityType_
+scheduleImportExists_
+cleanScheduleTitle_
+
+## Code.gs matched lines
+Code.gs:26: const SCHEDULE_IMPORT_SHEET_NAME = "Schedule Import";
+Code.gs:27: const SCHEDULE_PREVIEW_SHEET_NAME = "Schedule Import Preview";
+Code.gs:37: const ACTIVE_BOOKING_STATUSES = new Set(["Scheduled", "Confirmed", "Rescheduled"]);
+Code.gs:88: const lockActions = new Set(["book", "submit", "reschedule", "cancel", "reconcile"]);
+Code.gs:108: if (payload.action === "reschedule") {
+Code.gs:109: return apiJsonResponse_(typeof rescheduleConsultationBooking_ === "function"
+Code.gs:110: ? rescheduleConsultationBooking_(payload, {requestId: requestId, lockHeld: true, source: "PUBLIC_WEBHOOK"})
+Code.gs:111: : rescheduleManagedBooking_(payload, requestId), requestId);
+Code.gs:430: message: "The selected consultation schedule is no longer available.",
+Code.gs:441: message: "The selected consultation schedule is no longer available.",
+Code.gs:514: repairAction: "Manual or scheduled reconciliation",
+Code.gs:551: status: "Scheduled",
+Code.gs:794: "Scheduled",
+Code.gs:1129: throw new Error("Calendar event reschedule failed: " + status + " " + response.getContentText());
+Code.gs:1170: function updateCalendarLogForReschedule_(sheet, row, config, start, end, eventId, meetLink) {
+Code.gs:1177: sheet.getRange(row, 8).setValue("Rescheduled");
+Code.gs:1268: String(entry.status || "Scheduled"),
+Code.gs:1337: function rescheduleManagedBooking_(payload, requestId) {
+Code.gs:1344: return { ok: false, code: "BOOKING_NOT_ACTIVE", message: "This appointment can no longer be rescheduled online.", http_status: 409, retryable: false };
+Code.gs:1347: return { ok: false, code: "INVALID_SLOT", message: "Invalid reschedule time.", http_status: 400, retryable: false };
+Code.gs:1358: return { ok: false, code: "SLOT_UNAVAILABLE", message: "The selected consultation schedule is no longer available.", http_status: 409, retryable: false };
+Code.gs:1362: return { ok: false, code: "SLOT_UNAVAILABLE", message: "The selected consultation schedule is no longer available.", http_status: 409, retryable: false };
+Code.gs:1369: lastError: "Calendar event is missing; reschedule was not applied."
+Code.gs:1375: details: "Client attempted to reschedule but the Calendar event could not be found.",
+Code.gs:1380: return { ok: false, code: "RECONCILIATION_REQUIRED", message: "This appointment needs administrative assistance before it can be rescheduled.", http_status: 409, retryable: false };
+Code.gs:1387: return { ok: false, code: "CALENDAR_UPDATE_FAILED", message: "The appointment could not be rescheduled.", http_status: 502, retryable: true };
+Code.gs:1396: updateCalendarLogForReschedule_(log, logRow, config, newStart, newEnd, record.eventId, meetLink);
+Code.gs:1402: code: "LOG_RESCHEDULE_UPDATE_FAILED",
+Code.gs:1410: status: "Rescheduled",
+Code.gs:1431: action: "BOOK_RESCHEDULED",
+Code.gs:1439: code: reconciliationPending ? "RESCHEDULED_RECONCILIATION_PENDING" : "BOOKING_RESCHEDULED",
+Code.gs:1440: message: "Appointment rescheduled successfully.",
+Code.gs:1581: status: String(row[6] || "Scheduled"),
+Code.gs:1609: status: event.status === "cancelled" ? "Cancelled" : "Scheduled",
+Code.gs:1709: updateCalendarLogForReschedule_(calendarLog, logRow, config, eventStart, eventEnd, event.id, meetLink);
+Code.gs:1710: if (record.status === "Scheduled") calendarLog.getRange(logRow, 8).setValue("Scheduled");
+Code.gs:1836: function scheduledBookingReconciliation(event) {
+Code.gs:1837: return runScheduledTask_('scheduledBookingReconciliation', event, function() {
+Code.gs:1872: function buildScheduleImportDuplicateIndex_(calendarLog) {
+Code.gs:1888: signatures.add(scheduleImportSignature_(owner, date, startTime, getCalendarDisplayTitle_(activityType, notes)));
+Code.gs:1894: function scheduleImportSignature_(owner, date, startTime, title) {
+Code.gs:1994: PRODUCTION MAINTENANCE, MONTHLY SCHEDULE IMPORT, AND CALENDAR COLOR RENDERER
+Code.gs:1998: * Builds a reviewable import preview from the pasted monthly schedule matrix.
+Code.gs:2001: function previewMonthlyScheduleImport() {
+Code.gs:2002: return previewScheduleImport_();
+Code.gs:2004: const sourceSheet = ss.getSheetByName(SCHEDULE_IMPORT_SHEET_NAME);
+Code.gs:2005: const previewSheet = ss.getSheetByName(SCHEDULE_PREVIEW_SHEET_NAME);
+Code.gs:2006: if (!sourceSheet || !previewSheet) throw new Error("Schedule Import sheets were not found.");
+Code.gs:2011: throw new Error("Could not detect CALENDAR MONTH and YEAR from Schedule Import.");
+Code.gs:2021: console.log("No schedule entries were detected.");
+Code.gs:2037: "Scheduled",
+Code.gs:2052: console.log(output.length + " schedule entries were extracted into Schedule Import Preview.");
+Code.gs:2059: function commitScheduleImportPreview() {
+Code.gs:2060: return commitScheduleImport_();
+Code.gs:2062: const previewSheet = ss.getSheetByName(SCHEDULE_PREVIEW_SHEET_NAME);
+Code.gs:2073: const duplicateIndex = buildScheduleImportDuplicateIndex_(calendarLog);
+Code.gs:2090: const status = String(row[9] || "Scheduled").trim();
+Code.gs:2102: const signature = scheduleImportSignature_(owner, date, startTime, title);
+Code.gs:2114: "Imported monthly schedule",
+Code.gs:2162: console.error("Schedule import completed, but monthly calendar refresh failed: " +
+Code.gs:2166: console.log("Schedule import complete. Imported: " + imported +
+Code.gs:2219: if (amText) events.push.apply(events, parseScheduleCell_(amText, date, "AM", toA1_(r + 2, c + 1)));
+Code.gs:2222: if (pmText) events.push.apply(events, parseScheduleCell_(pmText, date, "PM", toA1_(r + 3, c + 1)));
+Code.gs:2231: events.push.apply(events, parseScheduleCell_(
+Code.gs:2243: function parseScheduleCell_(text, date, period, sourceCell) {
+Code.gs:2252: return parseInterviewBlocks_(normalized, date, period, sourceCell);
+Code.gs:2273: const parsed = parseSingleSchedulePart_(part, date, period, sourceCell, normalized);
+Code.gs:2280: function parseInterviewBlocks_(text, date, period, sourceCell) {
+Code.gs:2281: const blocks = text.split(/(?=Final Interview\s*-\s*)/i).map(function(item) {
+Code.gs:2287: const titleMatch = block.match(/(Final Interview\s*-\s*[^\n|]+)/i);
+Code.gs:2301: results.push(buildScheduleEvent_(
+Code.gs:2306: cleanScheduleTitle_(titleMatch[1]),
+Code.gs:2316: function parseSingleSchedulePart_(text, date, period, sourceCell, rawText) {
+Code.gs:2326: return buildScheduleEvent_(date, period,
+Code.gs:2329: cleanScheduleTitle_(explicitWholeMorning[3]) || "Morning Schedule",
+Code.gs:2334: return buildScheduleEvent_(date, period,
+Code.gs:2337: cleanScheduleTitle_(cleaned.replace(/whole morning/ig, "")) || "Morning Schedule",
+Code.gs:2342: return buildScheduleEvent_(date, period,
+Code.gs:2345: cleanScheduleTitle_(cleaned.replace(/whole afternoon/ig, "")) || "Afternoon Schedule",
+Code.gs:2350: return buildScheduleEvent_(date, period,
+Code.gs:2353: cleanScheduleTitle_(cleaned.replace(/whole day/ig, "")) || "Whole Day Schedule",
+Code.gs:2362: return buildScheduleEvent_(
+Code.gs:2367: cleanScheduleTitle_(rangeMatch[5] || cleaned),
+Code.gs:2378: const title = cleanScheduleTitle_(startMatch[3] || cleaned);
+Code.gs:2379: return buildScheduleEvent_(date, period, start,
+Code.gs:2387: const title = cleanScheduleTitle_(trailingTimeMatch[1]);
+Code.gs:2388: return buildScheduleEvent_(date, period, start,
+Code.gs:2397: const title = cleanScheduleTitle_(bareHourMatch[3]);
+Code.gs:2398: return buildScheduleEvent_(date, period, start,
+Code.gs:2403: return buildScheduleEvent_(
+Code.gs:2408: cleanScheduleTitle_(cleaned),
+Code.gs:2416: function buildScheduleEvent_(date, period, startTime, endTime, title, link, sourceCell, rawText, endWasExplicit) {
+Code.gs:2417: const cleanTitle = cleanScheduleTitle_(title);
+Code.gs:2418: const category = classifyScheduleCategory_(cleanTitle, rawText);
+Code.gs:2419: const activityType = classifyScheduleActivityType_(cleanTitle);
+Code.gs:2458: function classifyScheduleCategory_(title, rawText) {
+Code.gs:2463: if (/AVODAH|JOB INTERVIEW|FINAL INTERVIEW|INTERVIEW|ORIENTATION|PAYROLL|PASS REPORT|PROJECT 1|ERECRUITMENT|E-RECRUITMENT|\bGAS\b|RECRUIT|OONA/.test(value)) return "Avodah";
+Code.gs:2477: if (/AVODAH|RECRUIT|ERECRUITMENT|JOB INTERVIEW/.test(context)) return "Avodah";
+Code.gs:2483: function classifyScheduleActivityType_(title) {
+Code.gs:2486: if (/INTERVIEW|APPOINTMENT|CONSULTATION/.test(value)) return "Appointment";
+Code.gs:2495: if (/INTERVIEW|APPOINTMENT|CONSULTATION|CALL/.test(value)) return 30;
+Code.gs:2500: function scheduleImportExists_(calendarLog, importKey, owner, date, startTime, title) {
+Code.gs:2552: function cleanScheduleTitle_(text) {
+Code.gs:2798: .addItem("Preview Monthly Schedule", "previewMonthlyScheduleImport")
+Code.gs:2799: .addItem("Commit Schedule Preview", "commitScheduleImportPreview")
+Code.gs:2835: SCHEDULE_IMPORT_SHEET_NAME,
+Code.gs:2836: SCHEDULE_PREVIEW_SHEET_NAME
+
+## Config.gs matched lines
+Config.gs:29: 'ENABLE_RECRUITMENT_WRITES',
+Config.gs:31: 'ENABLE_SCHEDULE_IMPORT_WRITES',
+Config.gs:43: APPLICANT: 'APP',
+Config.gs:47: INTERVIEW: 'INTV',
+Config.gs:60: 'Preferred Contact Method', 'Preferred Schedule', 'Additional Notes',
+Config.gs:87: name: 'Applicant Tracking',
+Config.gs:90: 'Applicant ID', 'Applicant Name', 'Email', 'Normalized Email', 'Phone',
+Config.gs:93: 'Screening Status', 'Recruiter Rating', 'Interview Status',
+Config.gs:94: 'Initial Interview Date', 'Final Interview Date', 'Final Decision',
+Config.gs:95: 'Requirements Status', 'Onboarding Status', 'Assigned Recruiter',
+Config.gs:100: name: 'Applicant Timeline',
+Config.gs:103: 'Timeline ID', 'Applicant ID', 'Occurred At', 'Previous Stage',
+Config.gs:109: name: 'Interview Records',
+Config.gs:112: 'Interview ID', 'Applicant ID', 'Interview Type', 'Scheduled Start',
+Config.gs:113: 'Scheduled End', 'Interviewer', 'Calendar Event ID', 'Meet Link',
+Config.gs:114: 'Interview Status', 'Communication Score', 'Customer Service Score',
+Config.gs:117: 'Overall Score', 'Interview Result', 'Interview Notes', 'Created At',
+Config.gs:122: name: 'Requirements Tracker',
+Config.gs:125: 'Applicant ID', 'Requirement Key', 'Requirement Name', 'Status',
+Config.gs:131: name: 'Onboarding Tracker',
+Config.gs:134: 'Applicant ID', 'Step Key', 'Step Name', 'Status', 'Due Date',
+Config.gs:207: name: 'Recruitment Analytics',
+Config.gs:228: name: 'Schedule Import Preview',
+Config.gs:246: {handler: 'scheduledDashboardRefresh', type: 'EVERY_6_HOURS'},
+Config.gs:247: {handler: 'scheduledWeeklyReport', type: 'WEEKLY_MONDAY_7'},
+Config.gs:248: {handler: 'scheduledMonthlyReport', type: 'MONTHLY_DAY_1_7'}
+Config.gs:315: ['CALENDAR_STATUS', 'SCHEDULED', 'Scheduled', 'text', true, 10, ''],
+Config.gs:318: ['CALENDAR_STATUS', 'RESCHEDULED', 'Rescheduled', 'text', true, 40, ''],
+Config.gs:320: ['RECRUITMENT_STAGE', 'SCREENING', 'Screening', 'text', true, 10,
+Config.gs:321: 'Derived from the current applicant screening workflow.'],
+Config.gs:322: ['RECRUITMENT_STAGE', 'INITIAL_INTERVIEW', 'Initial Interview', 'text', true, 20, ''],
+Config.gs:323: ['RECRUITMENT_STAGE', 'FINAL_INTERVIEW', 'Final Interview', 'text', true, 30, ''],
+Config.gs:324: ['RECRUITMENT_STAGE', 'REQUIREMENTS', 'Requirements', 'text', true, 40, ''],
+Config.gs:325: ['RECRUITMENT_STAGE', 'ONBOARDING', 'Onboarding', 'text', true, 50, ''],
+Config.gs:326: ['RECRUITMENT_STAGE', 'CLOSED', 'Closed', 'text', true, 60, ''],
+Config.gs:327: ['RECRUITMENT_STATUS', 'NEW', 'New', 'text', true, 10, ''],
+Config.gs:328: ['RECRUITMENT_STATUS', 'FOR_REVIEW', 'For Review', 'text', true, 20, ''],
+Config.gs:329: ['RECRUITMENT_STATUS', 'SHORTLISTED', 'Shortlisted', 'text', true, 30, ''],
+Config.gs:330: ['RECRUITMENT_STATUS', 'SCHEDULED', 'Scheduled', 'text', true, 40, ''],
+Config.gs:331: ['RECRUITMENT_STATUS', 'COMPLETED', 'Completed', 'text', true, 50, ''],
+Config.gs:332: ['RECRUITMENT_STATUS', 'NO_SHOW', 'No Show', 'text', true, 60,
+Config.gs:334: ['RECRUITMENT_STATUS', 'RESCHEDULED', 'Rescheduled', 'text', true, 70, ''],
+Config.gs:335: ['RECRUITMENT_STATUS', 'ON_HOLD', 'On Hold', 'text', true, 80, ''],
+Config.gs:336: ['RECRUITMENT_STATUS', 'REJECTED', 'Rejected', 'text', true, 90, ''],
+Config.gs:337: ['RECRUITMENT_STATUS', 'WITHDRAWN', 'Withdrawn', 'text', true, 100, ''],
+Config.gs:338: ['RECRUITMENT_STATUS', 'HIRED', 'Hired', 'text', true, 110, '']
+Config.gs:339: ,['INTERVIEW_TYPE', 'INITIAL', 'Initial Interview', 'text', true, 10,
+Config.gs:340: 'Controlled interview type used by the recruitment workflow.']
+Config.gs:341: ,['INTERVIEW_TYPE', 'FINAL', 'Final Interview', 'text', true, 20,
+Config.gs:342: 'Controlled interview type used by the recruitment workflow.']
+Config.gs:343: ,['INTERVIEW_STATUS', 'SCHEDULED', 'Scheduled', 'text', true, 10, '']
+Config.gs:344: ,['INTERVIEW_STATUS', 'COMPLETED', 'Completed', 'text', true, 20, '']
+Config.gs:345: ,['INTERVIEW_STATUS', 'NO_SHOW', 'No Show', 'text', true, 30,
+Config.gs:346: 'Status only; the applicant remains in the same pipeline stage.']
+Config.gs:347: ,['INTERVIEW_STATUS', 'CANCELLED', 'Cancelled', 'text', true, 40, '']
+Config.gs:348: ,['INTERVIEW_RESULT', 'PROCEED', 'Proceed', 'text', true, 10, '']
+Config.gs:349: ,['INTERVIEW_RESULT', 'HOLD', 'Hold', 'text', true, 20, '']
+Config.gs:350: ,['INTERVIEW_RESULT', 'REJECT', 'Reject', 'text', true, 30, '']
+Config.gs:354: ,['REQUIREMENT_STATUS', 'REJECTED', 'Rejected', 'text', true, 40, '']
+Config.gs:355: ,['ONBOARDING_STATUS', 'NOT_STARTED', 'Not Started', 'text', true, 10, '']
+Config.gs:356: ,['ONBOARDING_STATUS', 'IN_PROGRESS', 'In Progress', 'text', true, 20, '']
+Config.gs:357: ,['ONBOARDING_STATUS', 'COMPLETED', 'Completed', 'text', true, 30, '']
+Config.gs:358: ,['ONBOARDING_STATUS', 'BLOCKED', 'Blocked', 'text', true, 40, '']
+Config.gs:362: ['Recruitment', 'Listing of Prospect Recruit Name', 1, ['prospectRecruitName']],
+Config.gs:363: ['Recruitment', 'Call Out for Initial Interview', 1,
+Config.gs:364: ['prospectRecruitName', 'interviewDate', 'interviewTime']],
+Config.gs:365: ['Recruitment', 'Initial Interview Update', 2,
+Config.gs:366: ['prospectRecruitName', 'interviewDate', 'interviewStatus']],
+Config.gs:367: ['Recruitment', 'Interview Result Update', 2,
+Config.gs:368: ['prospectRecruitName', 'interviewResult']],
+Config.gs:369: ['Recruitment', 'Orientation Attendance', 2,
+Config.gs:371: ['Recruitment', 'Contract Signing', 2,
+Config.gs:373: ['Recruitment', 'Coding', 3,
+Config.gs:375: ['Recruitment', 'Licensing Exam', 3,
+Config.gs:377: ['Recruitment', 'Licensing', 5,
+
+## Dashboard.gs matched lines
+Dashboard.gs:73: ' | Sources: Lead Database, Applicant Tracking, Booking Registry, ' +
+Dashboard.gs:84: {range: 'D48:F48', valueRange: 'D49:F50', label: 'ACTIVE APPLICANTS',
+Dashboard.gs:85: value: snapshot.recruitment.cards.activeApplicants,
+Dashboard.gs:86: note: 'Applicant Tracking rows excluding inactive, archived, void, or deleted records.'},
+Dashboard.gs:89: note: 'Scheduled, confirmed, or rescheduled Booking Registry rows.'},
+Dashboard.gs:109: {header: 'D53:F53', label: 'RECRUITMENT STAGE', startColumn: 4,
+Dashboard.gs:110: rows: snapshot.recruitment.breakdowns.stage},
+
+## FoundationTests.gs matched lines
+FoundationTests.gs:9: testAssert_(tests, 'invalid email rejected', !isValidEmail_('not-an-email'));
+FoundationTests.gs:15: testAssert_(tests, 'missing consent rejected', !isConsentGranted_('No'));
+FoundationTests.gs:277: testAssert_(results, 'busy-slot and buffer conflict rejected',
+FoundationTests.gs:304: var rescheduleSlot = null;
+FoundationTests.gs:305: for (var d = 0; d < laterAvailability.days.length && !rescheduleSlot; d += 1) {
+FoundationTests.gs:308: rescheduleSlot = laterAvailability.days[d].slots[s];
+FoundationTests.gs:313: if (!rescheduleSlot) throw avodahError_('NO_RESCHEDULE_SLOT',
+FoundationTests.gs:314: 'No second TEST slot is available for reschedule testing.');
+FoundationTests.gs:315: var rescheduled = rescheduleConsultationBooking_({
+FoundationTests.gs:317: start: rescheduleSlot.start
+FoundationTests.gs:319: testAssert_(results, 'reschedule lifecycle passed', rescheduled.ok &&
+FoundationTests.gs:320: rescheduled.code === 'BOOKING_RESCHEDULED');
+FoundationTests.gs:377: 'ENABLE_RECRUITMENT_WRITES', 'ENABLE_ANALYTICS_WRITES',
+FoundationTests.gs:378: 'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+FoundationTests.gs:398: testAssert_(tests, 'forged webhook secret is rejected',
+FoundationTests.gs:400: testAssert_(tests, 'direct trigger callback is rejected',
+FoundationTests.gs:402: assertAuthorizedTriggerEvent_('scheduledDashboardRefresh', null);
+FoundationTests.gs:436: testAssert_(tests, 'honeypot submission is rejected',
+FoundationTests.gs:441: testAssert_(tests, 'invalid public submission ID is rejected',
+FoundationTests.gs:463: testAssert_(tests, 'tampered public workflow token is rejected',
+FoundationTests.gs:468: testAssert_(tests, 'expired public workflow token is rejected',
+FoundationTests.gs:486: 'Status': 'Scheduled', 'Start': issuedAt,
+FoundationTests.gs:528: ['Recruitment', runRecruitmentValidationTests],
+FoundationTests.gs:530: ['Scheduled Reporting', runScheduledReportingValidationTests],
+FoundationTests.gs:531: ['Schedule Import', runScheduleImportValidationTests],
+FoundationTests.gs:591: preferred_schedule: 'First available TEST slot',
+FoundationTests.gs:678: var rescheduleSlot = null;
+FoundationTests.gs:680: dayIndex < laterAvailability.days.length && !rescheduleSlot;
+FoundationTests.gs:687: rescheduleSlot = candidate;
+FoundationTests.gs:692: if (!rescheduleSlot) {
+FoundationTests.gs:693: throw avodahError_('NO_RESCHEDULE_SLOT',
+FoundationTests.gs:694: 'No second TEST slot is available for public reschedule testing.');
+FoundationTests.gs:696: var rescheduled = reschedulePublicConsultationBooking({
+FoundationTests.gs:698: start: rescheduleSlot.start
+FoundationTests.gs:700: testAssert_(tests, 'public reschedule lifecycle passed', rescheduled.ok &&
+FoundationTests.gs:701: rescheduled.code === 'BOOKING_RESCHEDULED');
+
+## Intake.gs matched lines
+Intake.gs:4: return runScheduledTask_('handleSpreadsheetFormSubmit', event, function() {
+
+## Project1.gs relevant functions
+project1StatusSummary_
+
+## Project1.gs matched lines
+Project1.gs:5: interviewDate: {label: 'Interview Date', inputType: 'date'},
+Project1.gs:6: interviewTime: {label: 'Interview Time', inputType: 'time'},
+Project1.gs:7: interviewStatus: {label: 'Interview Status', inputType: 'text'},
+Project1.gs:8: interviewResult: {label: 'Interview Result', inputType: 'text'},
+Project1.gs:219: if (data.interviewStatus) return data.interviewStatus;
+Project1.gs:220: if (data.interviewResult) return data.interviewResult;
+Project1.gs:224: 'Call Out for Initial Interview': 'Interview Scheduled',
+Project1.gs:499: else if (fieldKey === 'interviewStatus') fields[fieldKey] = 'Completed';
+Project1.gs:500: else if (fieldKey === 'interviewResult') fields[fieldKey] = 'Proceed';
+
+## Recruitment.gs relevant functions
+recruitmentSettingValues_
+recruitmentPropertyEnabled_
+assertRecruitmentWritesEnabled_
+recruitmentActor_
+getRecruitmentFormDefinition
+recruitmentFirstBy_
+recruitmentRequireApplicant_
+validateRecruitmentStageStatus_
+appendApplicantTimeline_
+updateApplicantStateCore_
+recruitmentDuplicateApplicant_
+validateRecruitmentApplicantPayload_
+createRecruitmentApplicant
+transitionRecruitmentApplicant
+recruitmentCalendarConfig_
+assertRecruitmentCalendarWritesEnabled_
+inspectRecruitmentCalendarWindow_
+runRecruitmentCalendarReadinessCheck
+runRecruitmentCalendarCleanupCheck
+recruitmentInterviewDuplicate_
+createRecruitmentCalendarEvent_
+deleteRecruitmentCalendarEvent_
+scheduleRecruitmentInterview
+recruitmentScoreValues_
+validateInterviewProgression_
+recordRecruitmentInterviewResult
+recruitmentCompositeRow_
+recruitmentRequirementSummary_
+upsertApplicantRequirement
+recruitmentOnboardingSummary_
+upsertApplicantOnboardingStep
+listRecruitmentApplicants
+repairRecruitmentPhoneStorage
+runRecruitmentValidationTests
+recruitmentTestScores_
+runRecruitmentLifecycleIntegrationTest
+
+## Recruitment.gs matched lines
+Recruitment.gs:1: /** Recruitment pipeline, interviews, requirements, and onboarding. */
+Recruitment.gs:3: var RECRUITMENT_SCORE_HEADERS = Object.freeze([
+Recruitment.gs:12: function recruitmentSettingValues_(groupName) {
+Recruitment.gs:16: function recruitmentPropertyEnabled_(name) {
+Recruitment.gs:20: function assertRecruitmentWritesEnabled_() {
+Recruitment.gs:23: 'This recruitment package is restricted to the copied TEST environment.');
+Recruitment.gs:25: if (!recruitmentPropertyEnabled_('ENABLE_RECRUITMENT_WRITES')) {
+Recruitment.gs:26: throw avodahError_('RECRUITMENT_WRITES_DISABLED',
+Recruitment.gs:27: 'Set ENABLE_RECRUITMENT_WRITES=TRUE only for an approved TEST run.');
+Recruitment.gs:31: function recruitmentActor_() {
+Recruitment.gs:35: function getRecruitmentFormDefinition() {
+Recruitment.gs:41: recruitmentPropertyEnabled_('ENABLE_RECRUITMENT_WRITES'),
+Recruitment.gs:42: calendarWriteEnabled: recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES'),
+Recruitment.gs:43: stages: recruitmentSettingValues_('RECRUITMENT_STAGE'),
+Recruitment.gs:44: statuses: recruitmentSettingValues_('RECRUITMENT_STATUS'),
+Recruitment.gs:45: interviewTypes: recruitmentSettingValues_('INTERVIEW_TYPE'),
+Recruitment.gs:46: interviewStatuses: recruitmentSettingValues_('INTERVIEW_STATUS'),
+Recruitment.gs:47: interviewResults: recruitmentSettingValues_('INTERVIEW_RESULT'),
+Recruitment.gs:48: requirementStatuses: recruitmentSettingValues_('REQUIREMENT_STATUS'),
+Recruitment.gs:49: onboardingStatuses: recruitmentSettingValues_('ONBOARDING_STATUS')
+Recruitment.gs:53: function recruitmentFirstBy_(logicalSheetName, headerName, value) {
+Recruitment.gs:58: function recruitmentRequireApplicant_(applicantId) {
+Recruitment.gs:59: var id = String(applicantId || '').trim();
+Recruitment.gs:60: if (!id) throw avodahError_('APPLICANT_ID_REQUIRED', 'Applicant ID is required.');
+Recruitment.gs:61: var applicant = recruitmentFirstBy_('Applicant Tracking', 'Applicant ID', id);
+Recruitment.gs:62: if (!applicant || String(applicant.record['Record Status'] || '').toUpperCase() === 'VOID') {
+Recruitment.gs:63: throw avodahError_('APPLICANT_NOT_FOUND', 'No active applicant matches that ID.');
+Recruitment.gs:65: return applicant;
+Recruitment.gs:68: function validateRecruitmentStageStatus_(stage, status) {
+Recruitment.gs:71: var stages = recruitmentSettingValues_('RECRUITMENT_STAGE');
+Recruitment.gs:72: var statuses = recruitmentSettingValues_('RECRUITMENT_STATUS');
+Recruitment.gs:73: if (stageValue === 'No Show') {
+Recruitment.gs:75: 'No Show is a status and cannot be used as a pipeline stage.');
+Recruitment.gs:78: throw avodahError_('INVALID_RECRUITMENT_STAGE',
+Recruitment.gs:79: 'Stage must be one of the controlled recruitment stages.');
+Recruitment.gs:82: throw avodahError_('INVALID_RECRUITMENT_STATUS',
+Recruitment.gs:83: 'Status must be one of the controlled recruitment statuses.');
+Recruitment.gs:88: function appendApplicantTimeline_(details) {
+Recruitment.gs:89: return appendObjectRow_('Applicant Timeline', {
+Recruitment.gs:91: 'Applicant ID': details.applicantId,
+Recruitment.gs:103: function updateApplicantStateCore_(applicant, nextStage, nextStatus, details) {
+Recruitment.gs:104: var validated = validateRecruitmentStageStatus_(nextStage, nextStatus);
+Recruitment.gs:105: var previousStage = String(applicant.record['Current Stage'] || '');
+Recruitment.gs:106: var previousStatus = String(applicant.record['Current Status'] || '');
+Recruitment.gs:110: 'The applicant is already in the requested stage and status.');
+Recruitment.gs:120: updateObjectRow_('Applicant Tracking', applicant.rowNumber, updates);
+Recruitment.gs:122: appendApplicantTimeline_({
+Recruitment.gs:123: applicantId: applicant.record['Applicant ID'],
+Recruitment.gs:133: applicant.record['Current Stage'] = validated.stage;
+Recruitment.gs:134: applicant.record['Current Status'] = validated.status;
+Recruitment.gs:135: Object.keys(updates).forEach(function(header) { applicant.record[header] = updates[header]; });
+Recruitment.gs:139: function recruitmentDuplicateApplicant_(normalizedEmail, normalizedPhone) {
+Recruitment.gs:140: var rows = getObjectRows_('Applicant Tracking');
+Recruitment.gs:154: function validateRecruitmentApplicantPayload_(payload) {
+Recruitment.gs:156: var name = String(data.applicant_name || '').trim();
+Recruitment.gs:159: if (!name) throw avodahError_('APPLICANT_NAME_REQUIRED', 'Applicant name is required.');
+Recruitment.gs:161: throw avodahError_('INVALID_EMAIL', 'A valid applicant email is required.');
+Recruitment.gs:164: throw avodahError_('INVALID_PHONE', 'Applicant phone must be a valid mobile number.');
+Recruitment.gs:175: function createRecruitmentApplicant(payload) {
+Recruitment.gs:176: var actor = recruitmentActor_();
+Recruitment.gs:177: assertRecruitmentWritesEnabled_();
+Recruitment.gs:178: return withScriptLock_('create recruitment applicant', function() {
+Recruitment.gs:179: var clean = validateRecruitmentApplicantPayload_(payload);
+Recruitment.gs:180: var duplicate = recruitmentDuplicateApplicant_(clean.email, clean.phone);
+Recruitment.gs:182: return {ok: true, code: 'APPLICANT_ALREADY_EXISTS',
+Recruitment.gs:183: applicant_id: duplicate.record['Applicant ID'], duplicate: true};
+Recruitment.gs:185: var applicantId = generateUniqueId_('APPLICANT');
+Recruitment.gs:187: var row = appendObjectRow_('Applicant Tracking', {
+Recruitment.gs:188: 'Applicant ID': applicantId,
+Recruitment.gs:189: 'Applicant Name': clean.name,
+Recruitment.gs:207: appendApplicantTimeline_({applicantId: applicantId, newStage: 'Screening',
+Recruitment.gs:208: newStatus: 'New', reason: 'Applicant created', notes: payload.notes,
+Recruitment.gs:211: action: 'APPLICANT_CREATED', entityType: 'APPLICANT', entityId: applicantId,
+Recruitment.gs:213: return {ok: true, code: 'APPLICANT_CREATED', applicant_id: applicantId,
+Recruitment.gs:218: function transitionRecruitmentApplicant(payload) {
+Recruitment.gs:219: var actor = recruitmentActor_();
+Recruitment.gs:220: assertRecruitmentWritesEnabled_();
+Recruitment.gs:221: return withScriptLock_('transition recruitment applicant', function() {
+Recruitment.gs:222: var applicant = recruitmentRequireApplicant_(payload && payload.applicant_id);
+Recruitment.gs:223: var result = updateApplicantStateCore_(applicant, payload.stage, payload.status, {
+Recruitment.gs:228: action: 'APPLICANT_PIPELINE_UPDATED', entityType: 'APPLICANT',
+Recruitment.gs:229: entityId: applicant.record['Applicant ID'], requestId: String(payload.request_id || ''),
+Recruitment.gs:231: return {ok: true, code: 'APPLICANT_PIPELINE_UPDATED',
+Recruitment.gs:232: applicant_id: applicant.record['Applicant ID'], stage: result.stage,
+Recruitment.gs:237: function recruitmentCalendarConfig_() {
+Recruitment.gs:240: throw avodahError_('TEST_ONLY', 'Interview scheduling is restricted to TEST.');
+Recruitment.gs:245: function assertRecruitmentCalendarWritesEnabled_() {
+Recruitment.gs:246: assertRecruitmentWritesEnabled_();
+Recruitment.gs:250: function inspectRecruitmentCalendarWindow_(timeMin, timeMax) {
+Recruitment.gs:252: var config = recruitmentCalendarConfig_();
+Recruitment.gs:265: function runRecruitmentCalendarReadinessCheck() {
+Recruitment.gs:268: var response = inspectRecruitmentCalendarWindow_(start, end);
+Recruitment.gs:269: response.write_gate_enabled = recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES');
+Recruitment.gs:274: function runRecruitmentCalendarCleanupCheck() {
+Recruitment.gs:276: var config = recruitmentCalendarConfig_();
+Recruitment.gs:277: var rows = getObjectRows_('Interview Records').filter(function(item) {
+Recruitment.gs:281: recruitment_write_gate_enabled:
+Recruitment.gs:282: recruitmentPropertyEnabled_('ENABLE_RECRUITMENT_WRITES'),
+Recruitment.gs:284: recruitmentPropertyEnabled_('ENABLE_CALENDAR_WRITES')};
+Recruitment.gs:296: function recruitmentInterviewDuplicate_(applicantId, interviewType, start) {
+Recruitment.gs:297: var rows = getObjectRows_('Interview Records');
+Recruitment.gs:300: var storedStart = record['Scheduled Start'] instanceof Date ?
+Recruitment.gs:301: record['Scheduled Start'] : new Date(record['Scheduled Start']);
+Recruitment.gs:302: if (String(record['Applicant ID']) === applicantId &&
+Recruitment.gs:303: String(record['Interview Type']) === interviewType &&
+Recruitment.gs:305: String(record['Interview Status']) !== 'Cancelled') return rows[i];
+Recruitment.gs:310: function createRecruitmentCalendarEvent_(config, details) {
+Recruitment.gs:311: assertRecruitmentCalendarWritesEnabled_();
+Recruitment.gs:313: summary: '[TEST] Avodah ' + details.interviewType + ' - ' + details.applicantName,
+Recruitment.gs:314: description: ['Avodah Operations Hub recruitment interview.',
+Recruitment.gs:315: 'Applicant ID: ' + details.applicantId,
+Recruitment.gs:316: 'Interview ID: ' + details.interviewId].join('\n'),
+Recruitment.gs:324: requestId: ('avodahrecruitment' + details.interviewId + Utilities.getUuid())
+Recruitment.gs:329: source: 'avodah-operations-hub-recruitment',
+Recruitment.gs:333: applicantId: details.applicantId,
+Recruitment.gs:334: interviewId: details.interviewId
+Recruitment.gs:347: function deleteRecruitmentCalendarEvent_(config, eventId) {
+Recruitment.gs:349: assertRecruitmentCalendarWritesEnabled_();
+Recruitment.gs:362: function scheduleRecruitmentInterview(payload) {
+Recruitment.gs:363: var actor = recruitmentActor_();
+Recruitment.gs:364: assertRecruitmentCalendarWritesEnabled_();
+Recruitment.gs:365: return withScriptLock_('schedule recruitment interview', function() {
+Recruitment.gs:366: var applicant = recruitmentRequireApplicant_(payload && payload.applicant_id);
+Recruitment.gs:367: var interviewType = String(payload.interview_type || '').trim();
+Recruitment.gs:368: if (recruitmentSettingValues_('INTERVIEW_TYPE').indexOf(interviewType) === -1) {
+Recruitment.gs:369: throw avodahError_('INVALID_INTERVIEW_TYPE',
+Recruitment.gs:370: 'Interview type must be Initial Interview or Final Interview.');
+Recruitment.gs:372: var start = parseRequiredDate_(payload.start, 'Interview start');
+Recruitment.gs:373: var end = payload.end ? parseRequiredDate_(payload.end, 'Interview end') :
+Recruitment.gs:376: throw avodahError_('INVALID_INTERVIEW_WINDOW',
+Recruitment.gs:377: 'Interview end must be after start and within four hours.');
+Recruitment.gs:379: var duplicate = recruitmentInterviewDuplicate_(
+Recruitment.gs:380: applicant.record['Applicant ID'], interviewType, start);
+Recruitment.gs:382: return {ok: true, code: 'INTERVIEW_ALREADY_SCHEDULED',
+Recruitment.gs:383: interview_id: duplicate.record['Interview ID'], duplicate: true};
+Recruitment.gs:385: var config = recruitmentCalendarConfig_();
+Recruitment.gs:387: throw avodahError_('INTERVIEW_SLOT_BUSY',
+Recruitment.gs:388: 'The TEST calendar is already busy during that interview time.');
+Recruitment.gs:390: var interviewId = generateUniqueId_('INTERVIEW');
+Recruitment.gs:392: var interviewRow = null;
+Recruitment.gs:394: event = createRecruitmentCalendarEvent_(config, {
+Recruitment.gs:395: interviewId: interviewId,
+Recruitment.gs:396: applicantId: applicant.record['Applicant ID'],
+Recruitment.gs:397: applicantName: applicant.record['Applicant Name'],
+Recruitment.gs:398: interviewType: interviewType, start: start, end: end
+Recruitment.gs:400: interviewRow = appendObjectRow_('Interview Records', {
+Recruitment.gs:401: 'Interview ID': interviewId,
+Recruitment.gs:402: 'Applicant ID': applicant.record['Applicant ID'],
+Recruitment.gs:403: 'Interview Type': interviewType,
+Recruitment.gs:404: 'Scheduled Start': start,
+Recruitment.gs:405: 'Scheduled End': end,
+Recruitment.gs:406: 'Interviewer': String(payload.interviewer || actor.email).trim(),
+Recruitment.gs:409: 'Interview Status': 'Scheduled',
+Recruitment.gs:412: var targetStage = interviewType === 'Initial Interview' ?
+Recruitment.gs:413: 'Initial Interview' : 'Final Interview';
+Recruitment.gs:414: var dateHeader = interviewType === 'Initial Interview' ?
+Recruitment.gs:415: 'Initial Interview Date' : 'Final Interview Date';
+Recruitment.gs:416: var state = updateApplicantStateCore_(applicant, targetStage, 'Scheduled', {
+Recruitment.gs:417: reason: interviewType + ' scheduled', notes: payload.notes,
+Recruitment.gs:419: updates: {'Interview Status': 'Scheduled', [dateHeader]: start}
+Recruitment.gs:422: action: 'INTERVIEW_SCHEDULED', entityType: 'INTERVIEW', entityId: interviewId,
+Recruitment.gs:424: applicantId: applicant.record['Applicant ID'], interviewType: interviewType,
+Recruitment.gs:427: return {ok: true, code: 'INTERVIEW_SCHEDULED', interview_id: interviewId,
+Recruitment.gs:428: applicant_id: applicant.record['Applicant ID'], stage: state.stage,
+Recruitment.gs:432: if (interviewRow) {
+Recruitment.gs:433: try { updateObjectRow_('Interview Records', interviewRow,
+Recruitment.gs:434: {'Interview Status': 'Cancelled', 'Updated At': new Date()}); } catch (ignored) {}
+Recruitment.gs:436: if (event && event.id) deleteRecruitmentCalendarEvent_(config, event.id);
+Recruitment.gs:442: function recruitmentScoreValues_(payload, required) {
+Recruitment.gs:445: RECRUITMENT_SCORE_HEADERS.forEach(function(pair) {
+Recruitment.gs:453: throw avodahError_('INVALID_INTERVIEW_SCORE',
+Recruitment.gs:465: function validateInterviewProgression_(interviewType, currentStage, nextStage) {
+Recruitment.gs:466: var allowed = interviewType === 'Initial Interview' ?
+Recruitment.gs:467: ['Initial Interview', 'Final Interview', 'Closed'] :
+Recruitment.gs:468: ['Final Interview', 'Requirements', 'Closed'];
+Recruitment.gs:470: throw avodahError_('INVALID_INTERVIEW_PROGRESSION',
+Recruitment.gs:471: 'The selected next stage is not valid for this interview type.');
+Recruitment.gs:474: throw avodahError_('APPLICANT_CLOSED', 'A closed applicant cannot be reopened implicitly.');
+Recruitment.gs:478: function recordRecruitmentInterviewResult(payload) {
+Recruitment.gs:479: var actor = recruitmentActor_();
+Recruitment.gs:480: assertRecruitmentWritesEnabled_();
+Recruitment.gs:481: return withScriptLock_('record recruitment interview result', function() {
+Recruitment.gs:482: var interview = recruitmentFirstBy_('Interview Records', 'Interview ID',
+Recruitment.gs:483: payload && payload.interview_id);
+Recruitment.gs:484: if (!interview) throw avodahError_('INTERVIEW_NOT_FOUND', 'Interview record not found.');
+Recruitment.gs:485: var applicant = recruitmentRequireApplicant_(interview.record['Applicant ID']);
+Recruitment.gs:486: var status = String(payload.interview_status || '').trim();
+Recruitment.gs:487: if (recruitmentSettingValues_('INTERVIEW_STATUS').indexOf(status) === -1) {
+Recruitment.gs:488: throw avodahError_('INVALID_INTERVIEW_STATUS',
+Recruitment.gs:489: 'Interview status must be one of the controlled interview statuses.');
+Recruitment.gs:491: var isNoShow = status === 'No Show';
+Recruitment.gs:493: throw avodahError_('INTERVIEW_RESULT_STATUS_REQUIRED',
+Recruitment.gs:494: 'Results can only be recorded as Completed or No Show.');
+Recruitment.gs:496: var result = String(payload.interview_result || '').trim();
+Recruitment.gs:497: var nextStage = isNoShow ? applicant.record['Current Stage'] :
+Recruitment.gs:499: var nextStatus = isNoShow ? 'No Show' : String(payload.next_status || '').trim();
+Recruitment.gs:501: if (recruitmentSettingValues_('INTERVIEW_RESULT').indexOf(result) === -1) {
+Recruitment.gs:502: throw avodahError_('INVALID_INTERVIEW_RESULT',
+Recruitment.gs:503: 'Completed interviews require a controlled interview result.');
+Recruitment.gs:505: validateInterviewProgression_(interview.record['Interview Type'],
+Recruitment.gs:506: applicant.record['Current Stage'], nextStage);
+Recruitment.gs:508: validateRecruitmentStageStatus_(nextStage, nextStatus);
+Recruitment.gs:509: var scores = recruitmentScoreValues_(payload, !isNoShow);
+Recruitment.gs:510: var interviewUpdates = {
+Recruitment.gs:511: 'Interview Status': status,
+Recruitment.gs:512: 'Interview Result': isNoShow ? '' : result,
+Recruitment.gs:513: 'Interview Notes': String(payload.notes || ''),
+Recruitment.gs:516: Object.keys(scores).forEach(function(header) { interviewUpdates[header] = scores[header]; });
+Recruitment.gs:517: updateObjectRow_('Interview Records', interview.rowNumber, interviewUpdates);
+Recruitment.gs:518: var applicantUpdates = {'Interview Status': status};
+Recruitment.gs:519: if (interview.record['Interview Type'] === 'Final Interview' && !isNoShow) {
+Recruitment.gs:520: applicantUpdates['Final Decision'] = result;
+Recruitment.gs:522: var state = updateApplicantStateCore_(applicant, nextStage, nextStatus, {
+Recruitment.gs:523: reason: interview.record['Interview Type'] + ' result: ' + status,
+Recruitment.gs:525: updates: applicantUpdates
+Recruitment.gs:528: action: isNoShow ? 'INTERVIEW_NO_SHOW_RECORDED' : 'INTERVIEW_RESULT_RECORDED',
+Recruitment.gs:529: entityType: 'INTERVIEW', entityId: interview.record['Interview ID'],
+Recruitment.gs:531: applicantId: applicant.record['Applicant ID'], interviewStatus: status,
+Recruitment.gs:534: return {ok: true, code: isNoShow ? 'INTERVIEW_NO_SHOW_RECORDED' :
+Recruitment.gs:535: 'INTERVIEW_RESULT_RECORDED', interview_id: interview.record['Interview ID'],
+Recruitment.gs:536: applicant_id: applicant.record['Applicant ID'], stage: state.stage,
+Recruitment.gs:541: function recruitmentCompositeRow_(logicalSheet, applicantId, keyHeader, keyValue) {
+Recruitment.gs:544: if (String(rows[i].record['Applicant ID']) === applicantId &&
+Recruitment.gs:550: function recruitmentRequirementSummary_(applicantId) {
+Recruitment.gs:551: var rows = getObjectRows_('Requirements Tracker').filter(function(item) {
+Recruitment.gs:552: return String(item.record['Applicant ID']) === applicantId;
+Recruitment.gs:556: if (statuses.some(function(status) { return status === 'Rejected'; })) return 'Needs Attention';
+Recruitment.gs:564: function upsertApplicantRequirement(payload) {
+Recruitment.gs:565: var actor = recruitmentActor_();
+Recruitment.gs:566: assertRecruitmentWritesEnabled_();
+Recruitment.gs:567: return withScriptLock_('upsert applicant requirement', function() {
+Recruitment.gs:568: var applicant = recruitmentRequireApplicant_(payload && payload.applicant_id);
+Recruitment.gs:575: if (recruitmentSettingValues_('REQUIREMENT_STATUS').indexOf(status) === -1) {
+Recruitment.gs:579: var existing = recruitmentCompositeRow_('Requirements Tracker',
+Recruitment.gs:580: applicant.record['Applicant ID'], 'Requirement Key', key);
+Recruitment.gs:583: 'Applicant ID': applicant.record['Applicant ID'], 'Requirement Key': key,
+Recruitment.gs:592: if (existing) updateObjectRow_('Requirements Tracker', existing.rowNumber, record);
+Recruitment.gs:593: else appendObjectRow_('Requirements Tracker', record);
+Recruitment.gs:594: var summary = recruitmentRequirementSummary_(applicant.record['Applicant ID']);
+Recruitment.gs:595: updateObjectRow_('Applicant Tracking', applicant.rowNumber,
+Recruitment.gs:596: {'Requirements Status': summary, 'Updated At': now});
+Recruitment.gs:598: action: 'APPLICANT_REQUIREMENT_UPSERTED', entityType: 'APPLICANT_REQUIREMENT',
+Recruitment.gs:599: entityId: applicant.record['Applicant ID'] + '|' + key,
+Recruitment.gs:603: applicant_id: applicant.record['Applicant ID'], requirement_key: key,
+Recruitment.gs:604: status: status, requirements_summary: summary};
+Recruitment.gs:608: function recruitmentOnboardingSummary_(applicantId) {
+Recruitment.gs:609: var rows = getObjectRows_('Onboarding Tracker').filter(function(item) {
+Recruitment.gs:610: return String(item.record['Applicant ID']) === applicantId;
+Recruitment.gs:621: function upsertApplicantOnboardingStep(payload) {
+Recruitment.gs:622: var actor = recruitmentActor_();
+Recruitment.gs:623: assertRecruitmentWritesEnabled_();
+Recruitment.gs:624: return withScriptLock_('upsert applicant onboarding step', function() {
+Recruitment.gs:625: var applicant = recruitmentRequireApplicant_(payload && payload.applicant_id);
+Recruitment.gs:630: if (!key || !name) throw avodahError_('ONBOARDING_FIELDS_REQUIRED',
+Recruitment.gs:631: 'Onboarding step key and name are required.');
+Recruitment.gs:632: if (recruitmentSettingValues_('ONBOARDING_STATUS').indexOf(status) === -1) {
+Recruitment.gs:633: throw avodahError_('INVALID_ONBOARDING_STATUS',
+Recruitment.gs:634: 'Onboarding status must use the controlled status list.');
+Recruitment.gs:636: var existing = recruitmentCompositeRow_('Onboarding Tracker',
+Recruitment.gs:637: applicant.record['Applicant ID'], 'Step Key', key);
+Recruitment.gs:640: 'Applicant ID': applicant.record['Applicant ID'], 'Step Key': key,
+Recruitment.gs:648: if (existing) updateObjectRow_('Onboarding Tracker', existing.rowNumber, record);
+Recruitment.gs:649: else appendObjectRow_('Onboarding Tracker', record);
+Recruitment.gs:650: var summary = recruitmentOnboardingSummary_(applicant.record['Applicant ID']);
+Recruitment.gs:651: updateObjectRow_('Applicant Tracking', applicant.rowNumber,
+Recruitment.gs:652: {'Onboarding Status': summary, 'Updated At': now});
+Recruitment.gs:654: action: 'APPLICANT_ONBOARDING_UPSERTED', entityType: 'APPLICANT_ONBOARDING',
+Recruitment.gs:655: entityId: applicant.record['Applicant ID'] + '|' + key,
+Recruitment.gs:658: return {ok: true, code: existing ? 'ONBOARDING_UPDATED' : 'ONBOARDING_CREATED',
+Recruitment.gs:659: applicant_id: applicant.record['Applicant ID'], step_key: key,
+Recruitment.gs:660: status: status, onboarding_summary: summary};
+Recruitment.gs:664: function listRecruitmentApplicants(limit) {
+Recruitment.gs:667: return getObjectRows_('Applicant Tracking').filter(function(item) {
+Recruitment.gs:671: applicant_id: item.record['Applicant ID'],
+Recruitment.gs:672: applicant_name: item.record['Applicant Name'],
+Recruitment.gs:674: interview_status: item.record['Interview Status'],
+Recruitment.gs:675: requirements_status: item.record['Requirements Status'],
+Recruitment.gs:676: onboarding_status: item.record['Onboarding Status'],
+Recruitment.gs:682: function repairRecruitmentPhoneStorage() {
+Recruitment.gs:684: assertRecruitmentWritesEnabled_();
+Recruitment.gs:685: return withScriptLock_('repair recruitment phone storage', function() {
+Recruitment.gs:686: var rows = getObjectRows_('Applicant Tracking');
+Recruitment.gs:691: updateObjectRow_('Applicant Tracking', item.rowNumber,
+Recruitment.gs:696: action: 'RECRUITMENT_PHONE_STORAGE_REPAIRED',
+Recruitment.gs:697: entityType: 'APPLICANT', entityId: 'BATCH', details: {rowsRepaired: repaired}});
+Recruitment.gs:704: function runRecruitmentValidationTests() {
+Recruitment.gs:709: validateRecruitmentStageStatus_('Screening', 'New').status === 'New');
+Recruitment.gs:710: testAssert_(results, 'No Show rejected as a stage',
+Recruitment.gs:711: testErrorCode_(function() { validateRecruitmentStageStatus_('No Show', 'No Show'); }) ===
+Recruitment.gs:713: testAssert_(results, 'Invalid score rejected',
+Recruitment.gs:714: testErrorCode_(function() { recruitmentScoreValues_({
+Recruitment.gs:718: }, true); }) === 'INVALID_INTERVIEW_SCORE');
+Recruitment.gs:719: var average = recruitmentScoreValues_({
+Recruitment.gs:724: testAssert_(results, 'Six interview scores average correctly', average === 3);
+Recruitment.gs:727: testAssert_(results, 'Initial interview progression accepts Final Interview',
+Recruitment.gs:729: validateInterviewProgression_('Initial Interview', 'Initial Interview', 'Final Interview');
+Recruitment.gs:731: testAssert_(results, 'Final interview cannot regress to Screening',
+Recruitment.gs:733: validateInterviewProgression_('Final Interview', 'Final Interview', 'Screening');
+Recruitment.gs:734: }) === 'INVALID_INTERVIEW_PROGRESSION');
+Recruitment.gs:741: function recruitmentTestScores_() {
+Recruitment.gs:747: function runRecruitmentLifecycleIntegrationTest() {
+Recruitment.gs:749: assertRecruitmentCalendarWritesEnabled_();
+Recruitment.gs:752: var applicantId = '';
+Recruitment.gs:765: var applicant = createRecruitmentApplicant({
+Recruitment.gs:766: applicant_name: 'TEST Recruitment ' + label,
+Recruitment.gs:767: email: 'recruitment+' + label.toLowerCase() + '@example.test',
+Recruitment.gs:770: notes: 'Automated TEST recruitment lifecycle'
+Recruitment.gs:772: applicantId = applicant.applicant_id;
+Recruitment.gs:773: testAssert_(results, 'Applicant starts in Screening/New',
+Recruitment.gs:774: applicant.stage === 'Screening' && applicant.status === 'New');
+Recruitment.gs:776: var initialNoShow = scheduleRecruitmentInterview({applicant_id: applicantId,
+Recruitment.gs:777: interview_type: 'Initial Interview', start: slots[0].start,
+Recruitment.gs:778: end: slots[0].end, interviewer: actor.email});
+Recruitment.gs:780: var noShow = recordRecruitmentInterviewResult({
+Recruitment.gs:781: interview_id: initialNoShow.interview_id, interview_status: 'No Show',
+Recruitment.gs:784: testAssert_(results, 'No Show remains status and does not create a stage',
+Recruitment.gs:785: noShow.stage === 'Initial Interview' && noShow.status === 'No Show');
+Recruitment.gs:787: var initial = scheduleRecruitmentInterview({applicant_id: applicantId,
+Recruitment.gs:788: interview_type: 'Initial Interview', start: slots[1].start,
+Recruitment.gs:789: end: slots[1].end, interviewer: actor.email});
+Recruitment.gs:791: var initialPayload = recruitmentTestScores_();
+Recruitment.gs:792: initialPayload.interview_id = initial.interview_id;
+Recruitment.gs:793: initialPayload.interview_status = 'Completed';
+Recruitment.gs:794: initialPayload.interview_result = 'Proceed';
+Recruitment.gs:795: initialPayload.next_stage = 'Final Interview';
+Recruitment.gs:797: var initialResult = recordRecruitmentInterviewResult(initialPayload);
+Recruitment.gs:798: testAssert_(results, 'Initial interview advances to Final Interview',
+Recruitment.gs:799: initialResult.stage === 'Final Interview' && initialResult.overall_score > 0);
+Recruitment.gs:801: var finalInterview = scheduleRecruitmentInterview({applicant_id: applicantId,
+Recruitment.gs:802: interview_type: 'Final Interview', start: slots[2].start,
+Recruitment.gs:803: end: slots[2].end, interviewer: actor.email});
+Recruitment.gs:804: createdEvents.push(finalInterview.event_id);
+Recruitment.gs:805: var event = Calendar.Events.get(recruitmentCalendarConfig_().calendarId,
+Recruitment.gs:806: finalInterview.event_id);
+Recruitment.gs:807: testAssert_(results, 'Interview event has Google Meet and no guest invitations',
+Recruitment.gs:809: var finalPayload = recruitmentTestScores_();
+Recruitment.gs:810: finalPayload.interview_id = finalInterview.interview_id;
+Recruitment.gs:811: finalPayload.interview_status = 'Completed';
+Recruitment.gs:812: finalPayload.interview_result = 'Proceed';
+Recruitment.gs:813: finalPayload.next_stage = 'Requirements';
+Recruitment.gs:815: var finalResult = recordRecruitmentInterviewResult(finalPayload);
+Recruitment.gs:816: testAssert_(results, 'Final interview advances to Requirements',
+Recruitment.gs:817: finalResult.stage === 'Requirements');
+Recruitment.gs:819: upsertApplicantRequirement({applicant_id: applicantId,
+Recruitment.gs:822: var requirements = upsertApplicantRequirement({applicant_id: applicantId,
+Recruitment.gs:825: testAssert_(results, 'Requirements summary rolls into Applicant Tracking',
+Recruitment.gs:826: requirements.requirements_summary === 'Complete');
+Recruitment.gs:828: transitionRecruitmentApplicant({applicant_id: applicantId, stage: 'Onboarding',
+Recruitment.gs:829: status: 'For Review', reason: 'TEST requirements completed'});
+Recruitment.gs:830: upsertApplicantOnboardingStep({applicant_id: applicantId,
+Recruitment.gs:833: var onboarding = upsertApplicantOnboardingStep({applicant_id: applicantId,
+Recruitment.gs:836: testAssert_(results, 'Onboarding summary rolls into Applicant Tracking',
+Recruitment.gs:837: onboarding.onboarding_summary === 'Complete');
+Recruitment.gs:838: var closed = transitionRecruitmentApplicant({applicant_id: applicantId,
+Recruitment.gs:839: stage: 'Closed', status: 'Hired', reason: 'Automated TEST completion'});
+Recruitment.gs:840: testAssert_(results, 'Pipeline closes with Hired status',
+Recruitment.gs:841: closed.stage === 'Closed' && closed.status === 'Hired');
+Recruitment.gs:842: var timeline = findRowsByHeaderValue_('Applicant Timeline', 'Applicant ID', applicantId);
+Recruitment.gs:845: var config = recruitmentCalendarConfig_();
+Recruitment.gs:847: try { deleteRecruitmentCalendarEvent_(config, eventId); } catch (ignored) {}
+Recruitment.gs:850: var configAfter = recruitmentCalendarConfig_();
+Recruitment.gs:855: testAssert_(results, 'All TEST interview events inactive after lifecycle test',
+Recruitment.gs:859: applicantId: applicantId, calendarEventsRemoved: remaining.length === 0};
+
+## ScheduleImport.gs relevant functions
+assertScheduleImportEnvironment_
+assertScheduleImportWritesEnabled_
+assertScheduleImportCommitEnabled_
+scheduleImportRequiredHeaders_
+scheduleImportAssertHeaders_
+scheduleImportDigest_
+scheduleImportSourceFingerprint_
+scheduleImportExpandMergedGrid_
+scheduleImportSourceGrid_
+scheduleImportDateKey_
+scheduleImportTimeKey_
+scheduleImportSignatureSafe_
+scheduleImportTitleFromNotes_
+scheduleImportDuplicateIndex_
+scheduleImportEventErrors_
+scheduleImportClassifyCandidate_
+scheduleImportBuildPreviewRows_
+scheduleImportEnsureRowCapacity_
+scheduleImportCopyValidation_
+scheduleImportFormatPreview_
+previewScheduleImport_
+scheduleImportPreviewRecordToEvent_
+scheduleImportDateTime_
+scheduleImportCalendarRecord_
+scheduleImportNextCalendarRow_
+scheduleImportPreviewFieldSnapshot_
+scheduleImportApplyPreviewUpdate_
+scheduleImportRollback_
+commitScheduleImport_
+getScheduleImportStatus
+runScheduleImportValidationTests
+runScheduleImportPreviewTestTransaction
+scheduleImportTestTime_
+runScheduleImportCommitTestTransaction
+
+## ScheduleImport.gs matched lines
+ScheduleImport.gs:2: * Hardened Schedule Import orchestration.
+ScheduleImport.gs:4: * The pasted Schedule Import matrix remains read-only source material. Preview
+ScheduleImport.gs:9: var AVODAH_SCHEDULE_IMPORT = Object.freeze({
+ScheduleImport.gs:10: SOURCE_SHEET: 'Schedule Import',
+ScheduleImport.gs:11: PREVIEW_SHEET: 'Schedule Import Preview',
+ScheduleImport.gs:14: SOURCE_RECORD_TYPE: 'SCHEDULE_IMPORT',
+ScheduleImport.gs:15: DEFAULT_STATUS: 'Scheduled',
+ScheduleImport.gs:23: function assertScheduleImportEnvironment_() {
+ScheduleImport.gs:27: 'ENVIRONMENT must be TEST, STAGING, or PRODUCTION before Schedule Import is used.');
+ScheduleImport.gs:32: function assertScheduleImportWritesEnabled_() {
+ScheduleImport.gs:33: var environment = assertScheduleImportEnvironment_();
+ScheduleImport.gs:35: .getProperty('ENABLE_SCHEDULE_IMPORT_WRITES');
+ScheduleImport.gs:37: throw avodahError_('SCHEDULE_IMPORT_WRITES_DISABLED',
+ScheduleImport.gs:38: 'Set ENABLE_SCHEDULE_IMPORT_WRITES=TRUE only for an approved preview or commit window.');
+ScheduleImport.gs:43: function assertScheduleImportCommitEnabled_() {
+ScheduleImport.gs:44: var environment = assertScheduleImportWritesEnabled_();
+ScheduleImport.gs:49: 'Schedule Import commit also requires ENABLE_CALENDAR_WRITES=TRUE.');
+ScheduleImport.gs:54: function scheduleImportRequiredHeaders_() {
+ScheduleImport.gs:55: return getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET).headers.slice();
+ScheduleImport.gs:58: function scheduleImportAssertHeaders_(context, requiredHeaders) {
+ScheduleImport.gs:67: function scheduleImportDigest_(value) {
+ScheduleImport.gs:73: function scheduleImportSourceFingerprint_(sheet) {
+ScheduleImport.gs:79: return scheduleImportDigest_(safeJsonStringify_({values: values, merges: merges}));
+ScheduleImport.gs:82: function scheduleImportExpandMergedGrid_(values, mergeDefinitions, originRow, originColumn) {
+ScheduleImport.gs:103: function scheduleImportSourceGrid_(sheet) {
+ScheduleImport.gs:115: values: scheduleImportExpandMergedGrid_(range.getDisplayValues(),
+ScheduleImport.gs:119: fingerprint: scheduleImportSourceFingerprint_(sheet)
+ScheduleImport.gs:123: function scheduleImportDateKey_(value) {
+ScheduleImport.gs:128: function scheduleImportTimeKey_(value) {
+ScheduleImport.gs:133: function scheduleImportSignatureSafe_(owner, date, startTime, title) {
+ScheduleImport.gs:134: return [String(owner || '').trim(), scheduleImportDateKey_(date),
+ScheduleImport.gs:135: scheduleImportTimeKey_(startTime), normalizeKeyText_(title)].join('|');
+ScheduleImport.gs:138: function scheduleImportTitleFromNotes_(notes) {
+ScheduleImport.gs:143: function scheduleImportDuplicateIndex_() {
+ScheduleImport.gs:145: getObjectRows_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).forEach(function(item) {
+ScheduleImport.gs:156: var title = scheduleImportTitleFromNotes_(record.Notes) ||
+ScheduleImport.gs:159: index.signatures[scheduleImportSignatureSafe_(owner, date,
+ScheduleImport.gs:166: function scheduleImportEventErrors_(event, owner, requireExactTimes) {
+ScheduleImport.gs:187: function scheduleImportClassifyCandidate_(event, owner, duplicateIndex, seen) {
+ScheduleImport.gs:188: var errors = scheduleImportEventErrors_(event, owner, false);
+ScheduleImport.gs:191: var signature = scheduleImportSignatureSafe_(owner, event.date,
+ScheduleImport.gs:193: var status = AVODAH_SCHEDULE_IMPORT.READY_STATUS;
+ScheduleImport.gs:194: if (errors.length) status = AVODAH_SCHEDULE_IMPORT.INVALID_STATUS;
+ScheduleImport.gs:196: status = AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS;
+ScheduleImport.gs:199: status = AVODAH_SCHEDULE_IMPORT.DUPLICATE_CALENDAR_STATUS;
+ScheduleImport.gs:201: status = AVODAH_SCHEDULE_IMPORT.DUPLICATE_PREVIEW_STATUS;
+ScheduleImport.gs:205: return {include: status === AVODAH_SCHEDULE_IMPORT.READY_STATUS,
+ScheduleImport.gs:209: function scheduleImportBuildPreviewRows_(values, owner, duplicateIndex) {
+ScheduleImport.gs:212: throw avodahError_('SCHEDULE_MONTH_YEAR_NOT_FOUND',
+ScheduleImport.gs:213: 'Could not detect CALENDAR MONTH and YEAR from Schedule Import.');
+ScheduleImport.gs:220: var classification = scheduleImportClassifyCandidate_(event, owner,
+ScheduleImport.gs:222: if (classification.status === AVODAH_SCHEDULE_IMPORT.READY_STATUS) summary.ready += 1;
+ScheduleImport.gs:223: else if (classification.status === AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS) summary.review += 1;
+ScheduleImport.gs:224: else if (classification.status === AVODAH_SCHEDULE_IMPORT.INVALID_STATUS) summary.invalid += 1;
+ScheduleImport.gs:225: else if (classification.status === AVODAH_SCHEDULE_IMPORT.DUPLICATE_CALENDAR_STATUS) {
+ScheduleImport.gs:227: } else if (classification.status === AVODAH_SCHEDULE_IMPORT.DUPLICATE_PREVIEW_STATUS) {
+ScheduleImport.gs:232: event.link || '', AVODAH_SCHEDULE_IMPORT.DEFAULT_STATUS, event.reminder,
+ScheduleImport.gs:240: function scheduleImportEnsureRowCapacity_(sheet, requiredLastRow) {
+ScheduleImport.gs:247: function scheduleImportCopyValidation_(calendarContext, calendarHeader,
+ScheduleImport.gs:257: function scheduleImportFormatPreview_(previewSheet, rowCount, calendarContext) {
+ScheduleImport.gs:266: scheduleImportCopyValidation_(calendarContext, 'Activity Type', previewSheet, 7, rowCount);
+ScheduleImport.gs:267: scheduleImportCopyValidation_(calendarContext, 'Status', previewSheet, 10, rowCount);
+ScheduleImport.gs:268: scheduleImportCopyValidation_(calendarContext, 'Reminder', previewSheet, 11, rowCount);
+ScheduleImport.gs:269: scheduleImportCopyValidation_(calendarContext, 'Category', previewSheet, 12, rowCount);
+ScheduleImport.gs:270: scheduleImportCopyValidation_(calendarContext, 'Owner', previewSheet, 13, rowCount);
+ScheduleImport.gs:273: function previewScheduleImport_() {
+ScheduleImport.gs:275: var environment = assertScheduleImportWritesEnabled_();
+ScheduleImport.gs:276: return withScriptLock_('preview schedule import', function() {
+ScheduleImport.gs:278: var sourceSheet = spreadsheet.getSheetByName(AVODAH_SCHEDULE_IMPORT.SOURCE_SHEET);
+ScheduleImport.gs:280: AVODAH_SCHEDULE_IMPORT.SOURCE_SHEET + ' is missing.');
+ScheduleImport.gs:281: var previewContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:282: var calendarContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET);
+ScheduleImport.gs:283: scheduleImportAssertHeaders_(previewContext, scheduleImportRequiredHeaders_());
+ScheduleImport.gs:284: scheduleImportAssertHeaders_(calendarContext,
+ScheduleImport.gs:285: getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).headers);
+ScheduleImport.gs:286: var sourceGrid = scheduleImportSourceGrid_(sourceSheet);
+ScheduleImport.gs:288: if (!owner) throw avodahError_('SCHEDULE_OWNER_REQUIRED',
+ScheduleImport.gs:289: 'Schedule Import!B3 must contain the schedule owner.');
+ScheduleImport.gs:290: var built = scheduleImportBuildPreviewRows_(sourceGrid.values, owner,
+ScheduleImport.gs:291: scheduleImportDuplicateIndex_());
+ScheduleImport.gs:295: AVODAH_SCHEDULE_IMPORT.PREVIEW_COLUMNS).clearContent();
+ScheduleImport.gs:298: scheduleImportEnsureRowCapacity_(previewSheet, built.rows.length + 1);
+ScheduleImport.gs:300: AVODAH_SCHEDULE_IMPORT.PREVIEW_COLUMNS).setValues(built.rows);
+ScheduleImport.gs:301: scheduleImportFormatPreview_(previewSheet, built.rows.length, calendarContext);
+ScheduleImport.gs:309: action: 'SCHEDULE_IMPORT_PREVIEW_REFRESHED', entityType: 'SCHEDULE_IMPORT',
+ScheduleImport.gs:319: function scheduleImportPreviewRecordToEvent_(record) {
+ScheduleImport.gs:336: function scheduleImportDateTime_(date, time) {
+ScheduleImport.gs:344: function scheduleImportCalendarRecord_(record, event, calendarLogId, now) {
+ScheduleImport.gs:348: var notes = ['Imported monthly schedule', 'Title: ' + event.title,
+ScheduleImport.gs:358: 'Status': String(record.Status || AVODAH_SCHEDULE_IMPORT.DEFAULT_STATUS),
+ScheduleImport.gs:362: 'Start DateTime': scheduleImportDateTime_(event.date, event.startTime),
+ScheduleImport.gs:363: 'End DateTime': scheduleImportDateTime_(event.date, event.endTime),
+ScheduleImport.gs:370: 'Source Record Type': AVODAH_SCHEDULE_IMPORT.SOURCE_RECORD_TYPE,
+ScheduleImport.gs:379: function scheduleImportNextCalendarRow_(calendarContext) {
+ScheduleImport.gs:397: scheduleImportEnsureRowCapacity_(sheet, next);
+ScheduleImport.gs:401: function scheduleImportPreviewFieldSnapshot_(record) {
+ScheduleImport.gs:409: function scheduleImportApplyPreviewUpdate_(rowNumber, update) {
+ScheduleImport.gs:410: return updateObjectRow_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET, rowNumber, update);
+ScheduleImport.gs:413: function scheduleImportRollback_(calendarRows, previewSnapshots) {
+ScheduleImport.gs:414: var calendarContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET);
+ScheduleImport.gs:422: try { scheduleImportApplyPreviewUpdate_(item.rowNumber, item.snapshot); }
+ScheduleImport.gs:428: function commitScheduleImport_(options) {
+ScheduleImport.gs:430: var environment = assertScheduleImportCommitEnabled_();
+ScheduleImport.gs:433: return withScriptLock_('commit schedule import', function() {
+ScheduleImport.gs:434: var previewContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:435: var calendarContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET);
+ScheduleImport.gs:436: scheduleImportAssertHeaders_(previewContext, scheduleImportRequiredHeaders_());
+ScheduleImport.gs:437: scheduleImportAssertHeaders_(calendarContext,
+ScheduleImport.gs:438: getSheetDefinition_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).headers);
+ScheduleImport.gs:439: var duplicateIndex = scheduleImportDuplicateIndex_();
+ScheduleImport.gs:440: var previewRows = getObjectRows_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:456: var event = scheduleImportPreviewRecordToEvent_(record);
+ScheduleImport.gs:457: var errors = scheduleImportEventErrors_(event, record.Owner, true);
+ScheduleImport.gs:458: var signature = scheduleImportSignatureSafe_(record.Owner, event.date,
+ScheduleImport.gs:461: snapshot: scheduleImportPreviewFieldSnapshot_(record)});
+ScheduleImport.gs:466: 'Import Status': AVODAH_SCHEDULE_IMPORT.INVALID_STATUS,
+ScheduleImport.gs:484: var destinationRow = scheduleImportNextCalendarRow_(calendarContext);
+ScheduleImport.gs:485: updateObjectRow_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET, destinationRow,
+ScheduleImport.gs:486: scheduleImportCalendarRecord_(record, event, calendarLogId, now));
+ScheduleImport.gs:500: scheduleImportApplyPreviewUpdate_(item.rowNumber, item.update);
+ScheduleImport.gs:504: action: 'SCHEDULE_IMPORT_COMMITTED', entityType: 'SCHEDULE_IMPORT',
+ScheduleImport.gs:507: scheduleImportRollback_(createdCalendarRows, previewSnapshots);
+ScheduleImport.gs:508: console.error('Schedule Import rollback cause: ' +
+ScheduleImport.gs:510: throw avodahError_('SCHEDULE_IMPORT_COMMIT_ROLLED_BACK',
+ScheduleImport.gs:511: 'Schedule Import commit failed and its Calendar Log writes were rolled back.',
+ScheduleImport.gs:521: function getScheduleImportStatus() {
+ScheduleImport.gs:523: var rows = getObjectRows_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:530: schedule_import_writes_enabled: truthy_(PropertiesService.getScriptProperties()
+ScheduleImport.gs:531: .getProperty('ENABLE_SCHEDULE_IMPORT_WRITES')),
+ScheduleImport.gs:537: function runScheduleImportValidationTests() {
+ScheduleImport.gs:542: var expanded = scheduleImportExpandMergedGrid_([
+ScheduleImport.gs:552: var range = parseScheduleCell_('9:00 AM - 10:30 AM Client Meeting',
+ScheduleImport.gs:555: range.length === 1 && scheduleImportTimeKey_(range[0].startTime) === '09:00' &&
+ScheduleImport.gs:556: scheduleImportTimeKey_(range[0].endTime) === '10:30');
+ScheduleImport.gs:558: var single = parseScheduleCell_('1pm Client Call', date, 'PM', 'B10');
+ScheduleImport.gs:560: single.length === 1 && scheduleImportTimeKey_(single[0].startTime) === '13:00' &&
+ScheduleImport.gs:561: scheduleImportTimeKey_(single[0].endTime) === '13:30');
+ScheduleImport.gs:563: var broad = parseScheduleCell_('Team planning whole morning',
+ScheduleImport.gs:565: var broadClass = scheduleImportClassifyCandidate_(broad[0], 'TEST Owner',
+ScheduleImport.gs:570: broadClass.status === AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS && !broadClass.include);
+ScheduleImport.gs:573: var broadDuplicateClass = scheduleImportClassifyCandidate_(broad[0],
+ScheduleImport.gs:576: broadDuplicateClass.status === AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS);
+ScheduleImport.gs:578: var interview = parseScheduleCell_(
+ScheduleImport.gs:579: 'Final Interview - TEST Candidate\n2:00pm-2:30pm\nMeet link: https://meet.google.com/abc-defg-hij',
+ScheduleImport.gs:581: testAssert_(tests, 'Google Meet link is preserved', interview.length === 1 &&
+ScheduleImport.gs:582: interview[0].link === 'https://meet.google.com/abc-defg-hij');
+ScheduleImport.gs:584: var untimed = parseScheduleCell_('Prepare monthly report', date, 'OBJECTIVE', 'D11');
+ScheduleImport.gs:585: var untimedClass = scheduleImportClassifyCandidate_(untimed[0], 'TEST Owner',
+ScheduleImport.gs:588: untimedClass.status === AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS);
+ScheduleImport.gs:589: testAssert_(tests, 'untimed activity is rejected if manually selected for commit',
+ScheduleImport.gs:590: scheduleImportEventErrors_(untimed[0], 'TEST Owner', true).length > 0);
+ScheduleImport.gs:594: var duplicateClass = scheduleImportClassifyCandidate_(range[0], 'TEST Owner',
+ScheduleImport.gs:597: duplicateClass.status === AVODAH_SCHEDULE_IMPORT.DUPLICATE_CALENDAR_STATUS &&
+ScheduleImport.gs:606: function runScheduleImportPreviewTestTransaction() {
+ScheduleImport.gs:608: assertScheduleImportWritesEnabled_();
+ScheduleImport.gs:610: var source = spreadsheet.getSheetByName(AVODAH_SCHEDULE_IMPORT.SOURCE_SHEET);
+ScheduleImport.gs:611: var calendarBefore = getObjectRows_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).length;
+ScheduleImport.gs:612: var sourceBefore = scheduleImportSourceFingerprint_(source);
+ScheduleImport.gs:613: var response = previewScheduleImport_();
+ScheduleImport.gs:614: var sourceAfter = scheduleImportSourceFingerprint_(source);
+ScheduleImport.gs:615: var calendarAfter = getObjectRows_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET).length;
+ScheduleImport.gs:616: var previewRows = getObjectRows_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:628: return item.record['Import Status'] === AVODAH_SCHEDULE_IMPORT.REVIEW_STATUS;
+ScheduleImport.gs:634: testErrorCode_(function() { assertScheduleImportCommitEnabled_(); }) ===
+ScheduleImport.gs:643: function scheduleImportTestTime_(date, hour, minute) {
+ScheduleImport.gs:649: function runScheduleImportCommitTestTransaction() {
+ScheduleImport.gs:651: assertScheduleImportCommitEnabled_();
+ScheduleImport.gs:652: var previewContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET);
+ScheduleImport.gs:653: var key = 'TEST-SCHEDULE-IMPORT-' + Utilities.getUuid();
+ScheduleImport.gs:656: .getSheetByName(AVODAH_SCHEDULE_IMPORT.SOURCE_SHEET)
+ScheduleImport.gs:658: if (!testOwner) throw avodahError_('SCHEDULE_OWNER_REQUIRED',
+ScheduleImport.gs:659: 'Schedule Import!B3 must contain the schedule owner for the commit test.');
+ScheduleImport.gs:661: scheduleImportEnsureRowCapacity_(previewContext.sheet, fixtureRow);
+ScheduleImport.gs:666: updateObjectRow_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET, fixtureRow, {
+ScheduleImport.gs:668: 'Start Time': scheduleImportTestTime_(date, 9, 0),
+ScheduleImport.gs:669: 'End Time': scheduleImportTestTime_(date, 9, 30),
+ScheduleImport.gs:670: 'Activity Type': 'Meeting', 'Title': 'TEST Schedule Import Commit',
+ScheduleImport.gs:671: 'Location / Link': '', 'Status': 'Scheduled', 'Reminder': '30 minutes',
+ScheduleImport.gs:677: firstResult = commitScheduleImport_({onlyImportKey: key});
+ScheduleImport.gs:678: var afterFirst = findRowsByHeaderValue_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET,
+ScheduleImport.gs:682: var committedPreview = getObjectRow_(AVODAH_SCHEDULE_IMPORT.PREVIEW_SHEET,
+ScheduleImport.gs:688: scheduleImportApplyPreviewUpdate_(fixtureRow, {'Include?': true,
+ScheduleImport.gs:691: secondResult = commitScheduleImport_({onlyImportKey: key});
+ScheduleImport.gs:692: var afterSecond = findRowsByHeaderValue_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET,
+ScheduleImport.gs:698: var calendarContext = getTableContext_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET);
+ScheduleImport.gs:699: findRowsByHeaderValue_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET,
+ScheduleImport.gs:705: AVODAH_SCHEDULE_IMPORT.PREVIEW_COLUMNS).clearContent();
+ScheduleImport.gs:709: findRowsByHeaderValue_(AVODAH_SCHEDULE_IMPORT.CALENDAR_SHEET,
+
+## Setup.gs relevant functions
+getScriptPropertyStatus_
+
+## Setup.gs matched lines
+Setup.gs:19: throw avodahError_('SAMPLE_VALUE_REJECTED',
+Setup.gs:263: 'ENABLE_RECRUITMENT_WRITES', 'ENABLE_ANALYTICS_WRITES',
+Setup.gs:264: 'ENABLE_SCHEDULE_IMPORT_WRITES', 'ENABLE_CALENDAR_WRITES',
+
+## Triggers.gs relevant functions
+scheduledDashboardRefresh
+scheduledWeeklyReport
+scheduledMonthlyReport
+runScheduledTask_
+
+## Triggers.gs matched lines
+Triggers.gs:11: if (trigger.getHandlerFunction() !== 'scheduledBookingReconciliation') return;
+Triggers.gs:13: removedLegacy.push('scheduledBookingReconciliation');
+Triggers.gs:40: }).concat(['handleSpreadsheetFormSubmit', 'scheduledBookingReconciliation']);
+Triggers.gs:76: }).concat(['handleSpreadsheetFormSubmit', 'scheduledBookingReconciliation']);
+Triggers.gs:87: return runScheduledTask_('runHourlyFollowUpChecks', event, function() {
+Triggers.gs:94: return runScheduledTask_('reconcileBookingRecords', event, function() {
+Triggers.gs:100: function scheduledDashboardRefresh(event) {
+Triggers.gs:101: return runScheduledTask_('scheduledDashboardRefresh', event, function() {
+Triggers.gs:107: function scheduledWeeklyReport(event) {
+Triggers.gs:108: return runScheduledTask_('scheduledWeeklyReport', event, function() {
+Triggers.gs:114: function scheduledMonthlyReport(event) {
+Triggers.gs:115: return runScheduledTask_('scheduledMonthlyReport', event, function() {
+Triggers.gs:121: function runScheduledTask_(handler, event, callback) {
+Triggers.gs:153: 'Scheduled automation is disabled until reviewed activation.');
+Triggers.gs:179: scheduledDashboardRefresh: 'EVERY_6_HOURS',
+Triggers.gs:180: scheduledWeeklyReport: 'WEEKLY_MONDAY_7',
+Triggers.gs:181: scheduledMonthlyReport: 'MONTHLY_DAY_1_7'
+Triggers.gs:186: scheduledDashboardRefresh: typeof scheduledDashboardRefresh === 'function',
+Triggers.gs:187: scheduledWeeklyReport: typeof scheduledWeeklyReport === 'function',
+Triggers.gs:188: scheduledMonthlyReport: typeof scheduledMonthlyReport === 'function'
+Triggers.gs:204: errors.push('Invalid schedule for ' + handler + ': ' + type);
+
+## UAT02Manual.gs matched lines
+UAT02Manual.gs:50: preferred_schedule: 'UAT only - no booking requested',
+
+## UAT03Manual.gs matched lines
+UAT03Manual.gs:3: * Creates one controlled TEST booking, reschedules it, cancels it,
+UAT03Manual.gs:161: assert_(String(bookingItem.record.Status || '') === 'Scheduled',
+UAT03Manual.gs:162: 'UAT03_REGISTRY_STATUS_NOT_SCHEDULED', 'Booking Registry status is not Scheduled.');
+UAT03Manual.gs:194: assert_(calendarLog && String(calendarLog.record.Status || '') === 'Scheduled',
+UAT03Manual.gs:195: 'UAT03_CALENDAR_LOG_NOT_SCHEDULED',
+UAT03Manual.gs:196: 'Calendar Log did not record the scheduled booking.');
+UAT03Manual.gs:206: var rescheduleStart = findSecondAvailableStart_(availabilityAfterCreate, initialStart);
+UAT03Manual.gs:207: assert_(rescheduleStart, 'UAT03_NO_RESCHEDULE_SLOT',
+UAT03Manual.gs:210: var rescheduleResult = reschedulePublicConsultationBooking({
+UAT03Manual.gs:212: start: rescheduleStart
+UAT03Manual.gs:214: assert_(rescheduleResult && rescheduleResult.ok &&
+UAT03Manual.gs:215: rescheduleResult.code === 'BOOKING_RESCHEDULED',
+UAT03Manual.gs:216: 'UAT03_RESCHEDULE_FAILED', 'Controlled booking reschedule failed.');
+UAT03Manual.gs:218: var eventAfterReschedule = readBookingCalendarEvent_(config, eventId);
+UAT03Manual.gs:219: assert_(eventAfterReschedule && bookingEventDate_(eventAfterReschedule.start) &&
+UAT03Manual.gs:220: bookingEventDate_(eventAfterReschedule.start).toISOString() ===
+UAT03Manual.gs:221: new Date(rescheduleStart).toISOString(),
+UAT03Manual.gs:222: '[REDACTED_LONG_TOKEN]',
+UAT03Manual.gs:223: 'Rescheduled start time did not propagate to the TEST Calendar event.');
+UAT03Manual.gs:224: var logAfterReschedule = findCalendarLogBooking_(bookingId);
+UAT03Manual.gs:225: assert_(logAfterReschedule && String(logAfterReschedule.record.Status || '') === 'Rescheduled',
+UAT03Manual.gs:226: 'UAT03_CALENDAR_LOG_NOT_RESCHEDULED',
+UAT03Manual.gs:227: 'Calendar Log did not reflect the rescheduled status.');
+UAT03Manual.gs:229: var managedAfterReschedule = getPublicManagedBooking({management_token: managementToken});
+UAT03Manual.gs:230: assert_(managedAfterReschedule && managedAfterReschedule.ok &&
+UAT03Manual.gs:231: managedAfterReschedule.code === 'BOOKING_FOUND' &&
+UAT03Manual.gs:232: !publicHasInternalIds_(managedAfterReschedule),
+UAT03Manual.gs:233: '[REDACTED_LONG_TOKEN]',
+UAT03Manual.gs:234: 'Public management response after reschedule is invalid.');
+UAT03Manual.gs:301: rescheduled: true,
+
+## UAT04Manual.gs matched lines
+UAT04Manual.gs:6: 'ENABLE_RECRUITMENT_WRITES',
+UAT04Manual.gs:8: 'ENABLE_SCHEDULE_IMPORT_WRITES',
+
+## Validation.gs matched lines
+Validation.gs:15: results.push(ensureListValidationForColumn_('Applicant Tracking', 'Current Stage',
+Validation.gs:16: settingValues_('RECRUITMENT_STAGE')));
+Validation.gs:17: results.push(ensureListValidationForColumn_('Applicant Tracking', 'Current Status',
+Validation.gs:18: settingValues_('RECRUITMENT_STATUS')));
+Validation.gs:19: results.push(ensureListValidationForColumn_('Applicant Tracking', 'Record Status',
+Validation.gs:21: results.push(ensureListValidationForColumn_('Interview Records', 'Interview Type',
+Validation.gs:22: settingValues_('INTERVIEW_TYPE')));
+Validation.gs:23: results.push(ensureListValidationForColumn_('Interview Records', 'Interview Status',
+Validation.gs:24: settingValues_('INTERVIEW_STATUS')));
+Validation.gs:25: results.push(ensureListValidationForColumn_('Interview Records', 'Interview Result',
+Validation.gs:26: settingValues_('INTERVIEW_RESULT')));
+Validation.gs:27: results.push(ensureListValidationForColumn_('Requirements Tracker', 'Status',
+Validation.gs:29: results.push(ensureListValidationForColumn_('Onboarding Tracker', 'Status',
+Validation.gs:30: settingValues_('ONBOARDING_STATUS')));
+Validation.gs:35: 'Interview Records', header, 1, 5));
+Validation.gs:37: ['Application Date', 'Initial Interview Date', 'Final Interview Date'].forEach(
+Validation.gs:39: results.push(ensureDateValidationForColumn_('Applicant Tracking', header));
+Validation.gs:41: ['Scheduled Start', 'Scheduled End'].forEach(function(header) {
+Validation.gs:42: results.push(ensureDateTimeValidationForColumn_('Interview Records', header));
+Validation.gs:45: results.push(ensureDateTimeValidationForColumn_('Requirements Tracker', header));
+Validation.gs:47: results.push(ensureDateValidationForColumn_('Onboarding Tracker', 'Due Date'));
+Validation.gs:48: results.push(ensureDateTimeValidationForColumn_('Onboarding Tracker', 'Completed At'));
+
+## WebApp.gs relevant functions
+getInternalFoundationStatus
+publicPortalGateStatus_
+getPublicFoundationStatus
+reschedulePublicConsultationBooking
+
+## WebApp.gs matched lines
+WebApp.gs:172: preferredSchedule: publicPortalText_(
+WebApp.gs:173: input.preferred_schedule || input.preferredSchedule, 160),
+WebApp.gs:318: 'Preferred Schedule': normalized.preferredSchedule,
+WebApp.gs:378: function reschedulePublicConsultationBooking(payload) {
+WebApp.gs:381: return rescheduleConsultationBooking_({
