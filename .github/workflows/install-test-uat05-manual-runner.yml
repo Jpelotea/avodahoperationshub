@@ -1,0 +1,527 @@
+name: Install TEST UAT-05 Manual Runner
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/install-test-uat05-manual-runner.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install TEST-only UAT-05 runner
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat05-manual-runner-install.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-05 manual runner installation\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nrunner_executed=no\nspreadsheet_changed=no\nscript_properties_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_test_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Recruitment.gs
+          test -f src/Analytics.gs
+          test -f src/Utilities.gs
+
+          STAGE="write_runner"
+          cat > src/UAT05Manual.gs <<'EOF'
+          /**
+           * Phase 6 UAT-05 — controlled TEST recruitment workflow runner.
+           * Temporary TEST-only verification code. It is not deployed to production.
+           */
+
+          var AVODAH_UAT05_GATE_NAMES = Object.freeze([
+            'ENABLE_BOOKING_WORKFLOW',
+            'ENABLE_PROJECT1_WRITES',
+            'ENABLE_RECRUITMENT_WRITES',
+            'ENABLE_ANALYTICS_WRITES',
+            'ENABLE_SCHEDULE_IMPORT_WRITES',
+            'ENABLE_CALENDAR_WRITES',
+            'PUBLIC_PORTAL_ENABLED',
+            'ENABLE_AUTOMATION_TRIGGERS'
+          ]);
+
+          function uat05Assert_(condition, code, message, details) {
+            if (!condition) throw avodahError_(code, message, details || {});
+          }
+
+          function uat05GateState_() {
+            var properties = PropertiesService.getScriptProperties();
+            var state = {};
+            AVODAH_UAT05_GATE_NAMES.forEach(function(name) {
+              state[name] = String(properties.getProperty(name) || '').trim().toUpperCase() === 'TRUE';
+            });
+            return state;
+          }
+
+          function uat05SetAllGates_(enabled) {
+            var properties = PropertiesService.getScriptProperties();
+            AVODAH_UAT05_GATE_NAMES.forEach(function(name) {
+              properties.setProperty(name, enabled ? 'TRUE' : 'FALSE');
+            });
+          }
+
+          function uat05SetExecutionGates_() {
+            uat05SetAllGates_(false);
+            var properties = PropertiesService.getScriptProperties();
+            properties.setProperty('ENABLE_RECRUITMENT_WRITES', 'TRUE');
+            properties.setProperty('ENABLE_CALENDAR_WRITES', 'TRUE');
+          }
+
+          function uat05RequireSafeTest_() {
+            requireUserRole_(['ADMIN']);
+            uat05Assert_(getEnvironment_() === 'TEST', 'UAT05_TEST_ENVIRONMENT_REQUIRED',
+              'UAT-05 may run only in TEST.');
+            var spreadsheet = getHubSpreadsheet_();
+            uat05Assert_(/^TEST(?:\s|-)/i.test(spreadsheet.getName()),
+              'UAT05_TEST_SPREADSHEET_REQUIRED',
+              'UAT-05 requires a spreadsheet whose title begins with TEST.');
+            return spreadsheet;
+          }
+
+          function resetPhase6Uat05SafetyGates() {
+            uat05RequireSafeTest_();
+            uat05SetAllGates_(false);
+            var result = {
+              ok: true,
+              code: 'UAT05_SAFETY_GATES_RESET',
+              gates: uat05GateState_(),
+              environment: getEnvironment_(),
+              productionTouched: false
+            };
+            console.log(JSON.stringify(result));
+            return result;
+          }
+
+          function uat05RecordByApplicant_(logicalSheet, applicantId) {
+            return getObjectRows_(logicalSheet).filter(function(item) {
+              return String(item.record['Applicant ID'] || '') === String(applicantId || '');
+            });
+          }
+
+          function uat05Applicant_(applicantId) {
+            var row = recruitmentFirstBy_('Applicant Tracking', 'Applicant ID', applicantId);
+            uat05Assert_(row, 'UAT05_APPLICANT_NOT_FOUND',
+              'The controlled applicant could not be found.', {applicantId: applicantId});
+            return row;
+          }
+
+          function uat05Phone_(seed, offset) {
+            var numeric = String(seed || '').replace(/\D/g, '') + String(new Date().getTime());
+            var lastSeven = Number(numeric.slice(-7) || '0');
+            var value = (lastSeven + Number(offset || 0)) % 10000000;
+            return '+63918' + String(value).padStart(7, '0');
+          }
+
+          function uat05LifecyclePassed_(result) {
+            if (!result) return false;
+            if (result.passed === false || result.ok === false) return false;
+            if (Array.isArray(result.failures) && result.failures.length) return false;
+            if (Array.isArray(result.tests) && result.tests.some(function(test) {
+              return test && test.passed === false;
+            })) return false;
+            return true;
+          }
+
+          function uat05VoidApplicant_(applicantId, reason) {
+            if (!applicantId) return;
+            try {
+              var applicant = recruitmentFirstBy_('Applicant Tracking', 'Applicant ID', applicantId);
+              if (applicant) {
+                updateObjectRow_('Applicant Tracking', applicant.rowNumber, {
+                  'Record Status': 'VOID',
+                  'Recruiter Notes': String(reason || 'UAT-05 failure cleanup'),
+                  'Updated At': new Date()
+                });
+              }
+            } catch (ignoredApplicant) {}
+
+            try {
+              var config = recruitmentCalendarConfig_();
+              uat05RecordByApplicant_('Interview Records', applicantId).forEach(function(item) {
+                var eventId = String(item.record['Calendar Event ID'] || '').trim();
+                if (eventId) {
+                  try { deleteRecruitmentCalendarEvent_(config, eventId); } catch (ignoredEvent) {}
+                }
+                try {
+                  updateObjectRow_('Interview Records', item.rowNumber, {
+                    'Interview Status': 'Cancelled',
+                    'Updated At': new Date()
+                  });
+                } catch (ignoredInterview) {}
+              });
+            } catch (ignoredCalendar) {}
+          }
+
+          function uat05AnalyticsCards_() {
+            var snapshot = buildAnalyticsSnapshot_();
+            uat05Assert_(snapshot && snapshot.recruitment && snapshot.recruitment.cards,
+              'UAT05_ANALYTICS_SNAPSHOT_MISSING',
+              'Recruitment analytics could not be built from source records.');
+            return {
+              totalApplicants: Number(snapshot.recruitment.cards.totalApplicants || 0),
+              activeApplicants: Number(snapshot.recruitment.cards.activeApplicants || 0),
+              hiredApplicants: Number(snapshot.recruitment.cards.hiredApplicants || 0),
+              noShowApplicants: Number(snapshot.recruitment.cards.noShowApplicants || 0),
+              statusBreakdown: snapshot.recruitment.breakdowns &&
+                snapshot.recruitment.breakdowns.status || []
+            };
+          }
+
+          function runPhase6Uat05Manual() {
+            uat05RequireSafeTest_();
+            var startingGates = uat05GateState_();
+            var enabledAtStart = AVODAH_UAT05_GATE_NAMES.filter(function(name) {
+              return startingGates[name] === true;
+            });
+            uat05Assert_(enabledAtStart.length === 0, 'UAT05_UNSAFE_GATE_STATE',
+              'All eight controlled gates must be FALSE before UAT-05 starts.',
+              {enabledGates: enabledAtStart});
+
+            var validation = runRecruitmentValidationTests();
+            uat05Assert_(validation && validation.passed === true,
+              'UAT05_VALIDATION_FAILED',
+              'Recruitment validation tests did not pass.', validation || {});
+
+            var analyticsBefore = uat05AnalyticsCards_();
+            var mainApplicantId = '';
+            var rejectedApplicantId = '';
+            var withdrawnApplicantId = '';
+            var result = null;
+            var failure = null;
+
+            try {
+              uat05SetExecutionGates_();
+
+              var lifecycle = runRecruitmentLifecycleIntegrationTest();
+              uat05Assert_(uat05LifecyclePassed_(lifecycle),
+                'UAT05_HIRED_LIFECYCLE_FAILED',
+                'The controlled hired-applicant lifecycle did not pass.', lifecycle || {});
+              mainApplicantId = String(lifecycle.applicantId || lifecycle.applicant_id || '').trim();
+              uat05Assert_(mainApplicantId !== '', 'UAT05_MAIN_APPLICANT_ID_MISSING',
+                'The hired lifecycle did not return its Applicant ID.');
+              uat05Assert_(lifecycle.calendarEventsRemoved === true,
+                'UAT05_CALENDAR_CLEANUP_FAILED',
+                'The hired lifecycle did not confirm removal of its TEST interview events.');
+
+              var token = Utilities.formatDate(new Date(), Session.getScriptTimeZone(),
+                'yyyyMMddHHmmss') + '-' + Utilities.getUuid().slice(0, 8);
+              var rejectedEmail = 'uat05.rejected.' + token.toLowerCase() + '@example.test';
+              var withdrawnEmail = 'uat05.withdrawn.' + token.toLowerCase() + '@example.test';
+
+              var rejected = createRecruitmentApplicant({
+                applicant_name: 'UAT-05 Rejected ' + token,
+                email: rejectedEmail,
+                phone: uat05Phone_(token, 11),
+                location: 'TEST',
+                source: 'PHASE6_UAT05_MANUAL',
+                notes: 'Controlled UAT-05 rejected outcome'
+              });
+              rejectedApplicantId = String(rejected.applicant_id || '');
+              uat05Assert_(rejected.code === 'APPLICANT_CREATED' && rejectedApplicantId,
+                'UAT05_REJECTED_FIXTURE_CREATE_FAILED',
+                'The controlled rejected fixture was not created.', rejected);
+
+              var rejectedReplay = createRecruitmentApplicant({
+                applicant_name: 'UAT-05 Rejected Replay ' + token,
+                email: rejectedEmail,
+                phone: uat05Phone_(token, 11),
+                location: 'TEST',
+                source: 'PHASE6_UAT05_MANUAL',
+                notes: 'Controlled duplicate replay'
+              });
+              uat05Assert_(rejectedReplay.code === 'APPLICANT_ALREADY_EXISTS' &&
+                String(rejectedReplay.applicant_id || '') === rejectedApplicantId,
+                'UAT05_APPLICANT_DUPLICATE_REPLAY_FAILED',
+                'Duplicate applicant replay created or linked incorrectly.', rejectedReplay);
+
+              var rejectedClosed = transitionRecruitmentApplicant({
+                applicant_id: rejectedApplicantId,
+                stage: 'Closed',
+                status: 'Rejected',
+                reason: 'Controlled UAT-05 rejection',
+                notes: 'Rejected outcome consistency check'
+              });
+              uat05Assert_(rejectedClosed.stage === 'Closed' &&
+                rejectedClosed.status === 'Rejected',
+                'UAT05_REJECTED_OUTCOME_FAILED',
+                'Rejected applicant did not close consistently.', rejectedClosed);
+
+              var withdrawn = createRecruitmentApplicant({
+                applicant_name: 'UAT-05 Withdrawn ' + token,
+                email: withdrawnEmail,
+                phone: uat05Phone_(token, 29),
+                location: 'TEST',
+                source: 'PHASE6_UAT05_MANUAL',
+                notes: 'Controlled UAT-05 withdrawn outcome'
+              });
+              withdrawnApplicantId = String(withdrawn.applicant_id || '');
+              uat05Assert_(withdrawn.code === 'APPLICANT_CREATED' && withdrawnApplicantId,
+                'UAT05_WITHDRAWN_FIXTURE_CREATE_FAILED',
+                'The controlled withdrawn fixture was not created.', withdrawn);
+
+              transitionRecruitmentApplicant({
+                applicant_id: withdrawnApplicantId,
+                stage: 'Initial Interview',
+                status: 'Scheduled',
+                reason: 'Controlled UAT-05 schedule status'
+              });
+              var rescheduled = transitionRecruitmentApplicant({
+                applicant_id: withdrawnApplicantId,
+                stage: 'Initial Interview',
+                status: 'Rescheduled',
+                reason: 'Controlled UAT-05 reschedule status'
+              });
+              uat05Assert_(rescheduled.stage === 'Initial Interview' &&
+                rescheduled.status === 'Rescheduled',
+                'UAT05_RESCHEDULE_STATUS_FAILED',
+                'Rescheduled was not retained as a status on the interview stage.', rescheduled);
+
+              var withdrawnClosed = transitionRecruitmentApplicant({
+                applicant_id: withdrawnApplicantId,
+                stage: 'Closed',
+                status: 'Withdrawn',
+                reason: 'Controlled UAT-05 withdrawal',
+                notes: 'Withdrawn outcome consistency check'
+              });
+              uat05Assert_(withdrawnClosed.stage === 'Closed' &&
+                withdrawnClosed.status === 'Withdrawn',
+                'UAT05_WITHDRAWN_OUTCOME_FAILED',
+                'Withdrawn applicant did not close consistently.', withdrawnClosed);
+
+              var main = uat05Applicant_(mainApplicantId).record;
+              var rejectedRecord = uat05Applicant_(rejectedApplicantId).record;
+              var withdrawnRecord = uat05Applicant_(withdrawnApplicantId).record;
+              uat05Assert_(String(main['Current Stage']) === 'Closed' &&
+                String(main['Current Status']) === 'Hired',
+                'UAT05_HIRED_PRIMARY_RECORD_FAILED',
+                'Applicant Tracking did not retain the hired applicant as Closed/Hired.');
+              uat05Assert_(String(main['Requirements Status']) === 'Complete' &&
+                String(main['Onboarding Status']) === 'Complete',
+                'UAT05_HIRED_SUMMARY_FAILED',
+                'Requirements or onboarding summary did not roll into Applicant Tracking.');
+              uat05Assert_(String(rejectedRecord['Current Stage']) === 'Closed' &&
+                String(rejectedRecord['Current Status']) === 'Rejected',
+                'UAT05_REJECTED_PRIMARY_RECORD_FAILED',
+                'Applicant Tracking did not retain Closed/Rejected.');
+              uat05Assert_(String(withdrawnRecord['Current Stage']) === 'Closed' &&
+                String(withdrawnRecord['Current Status']) === 'Withdrawn',
+                'UAT05_WITHDRAWN_PRIMARY_RECORD_FAILED',
+                'Applicant Tracking did not retain Closed/Withdrawn.');
+
+              var interviews = uat05RecordByApplicant_('Interview Records', mainApplicantId);
+              var interviewStatuses = interviews.map(function(item) {
+                return String(item.record['Interview Status'] || '');
+              });
+              var interviewTypes = interviews.map(function(item) {
+                return String(item.record['Interview Type'] || '');
+              });
+              uat05Assert_(interviews.length === 3,
+                'UAT05_INTERVIEW_LINK_COUNT_FAILED',
+                'The hired applicant should have exactly three linked interview records.',
+                {count: interviews.length});
+              uat05Assert_(interviewStatuses.filter(function(value) {
+                return value === 'No Show';
+              }).length === 1 && interviewStatuses.filter(function(value) {
+                return value === 'Completed';
+              }).length === 2,
+                'UAT05_INTERVIEW_STATUS_FAILED',
+                'Expected one No Show and two Completed interview records.',
+                {statuses: interviewStatuses});
+              uat05Assert_(interviewTypes.filter(function(value) {
+                return value === 'Initial Interview';
+              }).length === 2 && interviewTypes.filter(function(value) {
+                return value === 'Final Interview';
+              }).length === 1,
+                'UAT05_INTERVIEW_TYPE_LINK_FAILED',
+                'Interview Records are not linked with the expected interview types.',
+                {types: interviewTypes});
+
+              var mainTimeline = uat05RecordByApplicant_('Applicant Timeline', mainApplicantId);
+              var withdrawnTimeline = uat05RecordByApplicant_('Applicant Timeline', withdrawnApplicantId);
+              var allTimeline = mainTimeline.concat(withdrawnTimeline);
+              var invalidStages = allTimeline.filter(function(item) {
+                var stage = String(item.record['New Stage'] || '');
+                return stage === 'No Show' || stage === 'Rescheduled';
+              });
+              uat05Assert_(mainTimeline.length >= 8,
+                'UAT05_TIMELINE_INCOMPLETE',
+                'The hired applicant timeline is missing representative lifecycle changes.',
+                {count: mainTimeline.length});
+              uat05Assert_(invalidStages.length === 0,
+                'UAT05_STATUS_USED_AS_STAGE',
+                'No Show or Rescheduled was incorrectly written as a pipeline stage.');
+              uat05Assert_(withdrawnTimeline.some(function(item) {
+                return String(item.record['New Stage']) === 'Initial Interview' &&
+                  String(item.record['New Status']) === 'Rescheduled';
+              }), 'UAT05_RESCHEDULE_TIMELINE_MISSING',
+                'The rescheduled status was not recorded in Applicant Timeline.');
+
+              var requirements = uat05RecordByApplicant_('Requirements Tracker', mainApplicantId);
+              var onboarding = uat05RecordByApplicant_('Onboarding Tracker', mainApplicantId);
+              uat05Assert_(requirements.length === 2 && requirements.every(function(item) {
+                return String(item.record.Status) === 'Verified';
+              }), 'UAT05_REQUIREMENTS_LINK_FAILED',
+                'The hired applicant does not have the expected verified requirements.',
+                {count: requirements.length});
+              uat05Assert_(onboarding.length === 2 && onboarding.every(function(item) {
+                return String(item.record.Status) === 'Completed';
+              }), 'UAT05_ONBOARDING_LINK_FAILED',
+                'The hired applicant does not have the expected completed onboarding steps.',
+                {count: onboarding.length});
+              uat05Assert_(uat05RecordByApplicant_('Requirements Tracker', rejectedApplicantId).length === 0 &&
+                uat05RecordByApplicant_('Onboarding Tracker', rejectedApplicantId).length === 0 &&
+                uat05RecordByApplicant_('Requirements Tracker', withdrawnApplicantId).length === 0 &&
+                uat05RecordByApplicant_('Onboarding Tracker', withdrawnApplicantId).length === 0,
+                'UAT05_INAPPLICABLE_TRACKERS_CREATED',
+                'Requirements or onboarding rows were created for rejected/withdrawn applicants.');
+
+              var analyticsAfter = uat05AnalyticsCards_();
+              var statusJson = safeJsonStringify_(analyticsAfter.statusBreakdown).toUpperCase();
+              uat05Assert_(analyticsAfter.totalApplicants === analyticsBefore.totalApplicants + 3,
+                'UAT05_ANALYTICS_TOTAL_DELTA_FAILED',
+                'Recruitment analytics did not consume all three controlled applicants.',
+                {before: analyticsBefore.totalApplicants, after: analyticsAfter.totalApplicants});
+              uat05Assert_(analyticsAfter.hiredApplicants === analyticsBefore.hiredApplicants + 1,
+                'UAT05_ANALYTICS_HIRED_DELTA_FAILED',
+                'Recruitment analytics did not consume the controlled hired applicant.',
+                {before: analyticsBefore.hiredApplicants, after: analyticsAfter.hiredApplicants});
+              uat05Assert_(statusJson.indexOf('HIRED') !== -1 &&
+                statusJson.indexOf('REJECTED') !== -1 &&
+                statusJson.indexOf('WITHDRAWN') !== -1,
+                'UAT05_ANALYTICS_STATUS_BREAKDOWN_FAILED',
+                'Recruitment analytics status breakdown omitted a controlled closed outcome.');
+
+              result = {
+                ok: true,
+                code: 'UAT05_MANUAL_PASS',
+                mainApplicantId: mainApplicantId,
+                rejectedApplicantId: rejectedApplicantId,
+                withdrawnApplicantId: withdrawnApplicantId,
+                applicantTrackingPrimary: true,
+                linkedInterviewRecords: interviews.length,
+                timelineRecords: mainTimeline.length +
+                  uat05RecordByApplicant_('Applicant Timeline', rejectedApplicantId).length +
+                  withdrawnTimeline.length,
+                noShowRetainedAsStatus: interviewStatuses.indexOf('No Show') !== -1,
+                rescheduledRetainedAsStatus: true,
+                requirementsRecords: requirements.length,
+                onboardingRecords: onboarding.length,
+                inapplicableTrackersAbsent: true,
+                hiredOutcome: String(main['Current Status']),
+                rejectedOutcome: String(rejectedRecord['Current Status']),
+                withdrawnOutcome: String(withdrawnRecord['Current Status']),
+                duplicateApplicantReplayBlocked: true,
+                calendarEventsRemoved: lifecycle.calendarEventsRemoved === true,
+                analyticsBefore: analyticsBefore,
+                analyticsAfter: analyticsAfter,
+                productionTouched: false
+              };
+            } catch (error) {
+              failure = error;
+              uat05VoidApplicant_(mainApplicantId, 'UAT-05 failure cleanup');
+              uat05VoidApplicant_(rejectedApplicantId, 'UAT-05 failure cleanup');
+              uat05VoidApplicant_(withdrawnApplicantId, 'UAT-05 failure cleanup');
+            } finally {
+              uat05SetAllGates_(false);
+            }
+
+            if (failure) throw failure;
+            result.gates = uat05GateState_();
+            result.environment = getEnvironment_();
+            console.log(JSON.stringify(result));
+            return result;
+          }
+          EOF
+
+          STAGE="syntax_check"
+          for f in src/*.gs; do node --check < "$f"; done
+
+          STAGE="push_live_test_source"
+          clasp push --force >/dev/null
+
+          STAGE="pullback_verification"
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/UAT05Manual.gs
+          grep -Fq 'function runPhase6Uat05Manual()' verify-src/UAT05Manual.gs
+          grep -Fq 'function resetPhase6Uat05SafetyGates()' verify-src/UAT05Manual.gs
+          grep -Fq "code: 'UAT05_MANUAL_PASS'" verify-src/UAT05Manual.gs
+          grep -Fq "properties.setProperty('ENABLE_RECRUITMENT_WRITES', 'TRUE')" verify-src/UAT05Manual.gs
+          grep -Fq "properties.setProperty('ENABLE_CALENDAR_WRITES', 'TRUE')" verify-src/UAT05Manual.gs
+          grep -Fq 'uat05SetAllGates_(false);' verify-src/UAT05Manual.gs
+
+          STAGE="write_success_report"
+          cat > "$REPORT" <<EOF
+          TEST UAT-05 manual runner installation
+          status=SUCCESS
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          runner_file=UAT05Manual.gs
+          runner_function=runPhase6Uat05Manual
+          reset_function=resetPhase6Uat05SafetyGates
+          live_source_push=success
+          live_pullback_verification=success
+          runner_executed=no
+          spreadsheet_changed=no
+          script_properties_changed=no
+          calendar_changed=no
+          deployment_changed=no
+          production_touched=no
+          EOF
+          STAGE="complete"
+
+      - name: Publish sanitized result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat05-manual-runner-install.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-05 manual runner installation\nstatus=FAILED\nfailed_stage=report_missing\nrunner_executed=no\nspreadsheet_changed=no\nscript_properties_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-05 manual runner installation" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-05 manual runner installation" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
