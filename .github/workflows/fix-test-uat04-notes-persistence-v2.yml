@@ -1,0 +1,262 @@
+name: Fix TEST UAT-04 Notes Persistence V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/fix-test-uat04-notes-persistence-v2.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Patch TEST Head and install migration function
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-persistence-fix-v2.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-04 Notes persistence fix V2\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nspreadsheet_changed_during_install=no\nscript_properties_changed=no\ngates_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_test_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Config.gs
+          test -f src/Project1.gs
+          test -f src/UAT04Manual.gs
+
+          STAGE="patch_live_source_files"
+          node <<'NODE'
+          const fs = require('fs');
+
+          function findMatching(text, openIndex, openChar, closeChar) {
+            let depth = 0;
+            let single = false;
+            let double = false;
+            let template = false;
+            let escape = false;
+            for (let i = openIndex; i < text.length; i += 1) {
+              const c = text[i];
+              if (escape) {
+                escape = false;
+                continue;
+              }
+              if (c === '\\') {
+                escape = true;
+                continue;
+              }
+              if (!double && !template && c === "'") single = !single;
+              else if (!single && !template && c === '"') double = !double;
+              else if (!single && !double && c === '`') template = !template;
+              else if (!single && !double && !template) {
+                if (c === openChar) depth += 1;
+                else if (c === closeChar) {
+                  depth -= 1;
+                  if (depth === 0) return i;
+                }
+              }
+            }
+            return -1;
+          }
+
+          const states = [];
+
+          let config = fs.readFileSync('src/Config.gs', 'utf8');
+          const schemaMarker = "name: 'Project 1 Activity Database'";
+          const schemaPos = config.indexOf(schemaMarker);
+          if (schemaPos < 0) throw new Error('Project 1 schema marker not found in Config.gs.');
+          const headersPos = config.indexOf('headers:', schemaPos);
+          if (headersPos < 0) throw new Error('Project 1 headers marker not found in Config.gs.');
+          const arrayOpen = config.indexOf('[', headersPos);
+          if (arrayOpen < 0) throw new Error('Project 1 headers array open bracket not found.');
+          const arrayClose = findMatching(config, arrayOpen, '[', ']');
+          if (arrayClose < 0) throw new Error('Project 1 headers array close bracket not found.');
+          let schemaBlock = config.slice(arrayOpen, arrayClose + 1);
+          if (!schemaBlock.includes("'Notes'")) {
+            const updatedAtMatches = schemaBlock.match(/'Updated At'/g) || [];
+            if (updatedAtMatches.length !== 1) {
+              throw new Error('Expected exactly one Updated At header in Project 1 schema; found ' + updatedAtMatches.length + '.');
+            }
+            schemaBlock = schemaBlock.replace(/'Updated At'/, "'Updated At', 'Notes'");
+            config = config.slice(0, arrayOpen) + schemaBlock + config.slice(arrayClose + 1);
+            states.push('config_changed');
+          } else {
+            states.push('config_already_patched');
+          }
+          fs.writeFileSync('src/Config.gs', config);
+
+          let project1 = fs.readFileSync('src/Project1.gs', 'utf8');
+          const writerMarker = "appendObjectRow_('Project 1 Activity Database', {";
+          const writerPos = project1.indexOf(writerMarker);
+          if (writerPos < 0) throw new Error('Project 1 append writer marker not found.');
+          const objectOpen = project1.indexOf('{', writerPos);
+          const objectClose = findMatching(project1, objectOpen, '{', '}');
+          if (objectClose < 0) throw new Error('Project 1 append object close bracket not found.');
+          let writerBlock = project1.slice(objectOpen, objectClose + 1);
+          if (!writerBlock.includes("'Notes':")) {
+            const proofPattern = /('Proof URL'\s*:\s*validated\.proofUrl\s*,\s*\n)/;
+            if (!proofPattern.test(writerBlock)) {
+              throw new Error('Project 1 Proof URL writer line not found in append object.');
+            }
+            writerBlock = writerBlock.replace(proofPattern, "$1      'Notes': validated.notes,\n");
+            project1 = project1.slice(0, objectOpen) + writerBlock + project1.slice(objectClose + 1);
+            states.push('writer_changed');
+          } else {
+            states.push('writer_already_patched');
+          }
+          fs.writeFileSync('src/Project1.gs', project1);
+
+          let runner = fs.readFileSync('src/UAT04Manual.gs', 'utf8');
+          const migrationMarker = 'function applyPhase6Uat04NotesSchemaFix()';
+          if (!runner.includes(migrationMarker)) {
+            const insertionMarker = 'function runPhase6Uat04Manual() {';
+            const insertionPos = runner.indexOf(insertionMarker);
+            if (insertionPos < 0) throw new Error('UAT-04 runner insertion marker not found.');
+            const migrationLines = [
+              'function applyPhase6Uat04NotesSchemaFix() {',
+              "  requireUserRole_(['ADMIN']);",
+              "  uat04Assert_(getEnvironment_() === 'TEST', 'UAT04_TEST_ENVIRONMENT_REQUIRED',",
+              "    'The Notes schema migration may run only in TEST.');",
+              '  var spreadsheet = getHubSpreadsheet_();',
+              "  uat04Assert_(/^TEST(?:\\s|-)/i.test(spreadsheet.getName()),",
+              "    'UAT04_TEST_SPREADSHEET_REQUIRED',",
+              "    'The Notes schema migration requires a spreadsheet whose title begins with TEST.');",
+              '',
+              '  var startingGates = uat04GateState_();',
+              '  var unsafe = AVODAH_UAT04_GATE_NAMES.filter(function(name) {',
+              '    return startingGates[name] === true;',
+              '  });',
+              "  uat04Assert_(unsafe.length === 0, 'UAT04_UNSAFE_GATE_STATE',",
+              "    'All controlled gates must be FALSE before the Notes schema migration starts.',",
+              '    {enabledGates: unsafe});',
+              '',
+              "  var definition = getSheetDefinition_('Project 1 Activity Database');",
+              '  uat04Assert_(definition && Array.isArray(definition.headers) &&',
+              "    definition.headers.indexOf('Notes') !== -1,",
+              "    'UAT04_NOTES_SCHEMA_DEFINITION_MISSING',",
+              "    'The live TEST source does not define the Project 1 Notes column.');",
+              '',
+              '  ensureSheetForDefinition_(spreadsheet, definition);',
+              '  SpreadsheetApp.flush();',
+              "  var context = getTableContext_('Project 1 Activity Database');",
+              "  var notesColumn = context.headerMap[normalizeHeader_('Notes')] || 0;",
+              "  uat04Assert_(notesColumn > 0, 'UAT04_NOTES_COLUMN_NOT_CREATED',",
+              "    'The Project 1 Notes column was not created.');",
+              '',
+              '  var result = {',
+              '    ok: true,',
+              "    code: 'UAT04_NOTES_SCHEMA_APPLIED',",
+              '    sheet: context.sheet.getName(),',
+              '    notesColumn: notesColumn,',
+              '    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),',
+              '    gates: uat04GateState_(),',
+              '    environment: getEnvironment_(),',
+              '    productionTouched: false',
+              '  };',
+              '  console.log(JSON.stringify(result));',
+              '  return result;',
+              '}',
+              '',
+              ''
+            ];
+            runner = runner.slice(0, insertionPos) + migrationLines.join('\n') + runner.slice(insertionPos);
+            states.push('runner_changed');
+          } else {
+            states.push('runner_already_patched');
+          }
+          fs.writeFileSync('src/UAT04Manual.gs', runner);
+
+          fs.writeFileSync('/tmp/patch-state.txt', states.join(','));
+          NODE
+
+          STAGE="syntax_check"
+          for f in src/*.gs; do node --check < "$f"; done
+
+          STAGE="push_live_test_source"
+          clasp push --force >/dev/null
+
+          STAGE="pullback_verification"
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/Config.gs
+          test -f verify-src/Project1.gs
+          test -f verify-src/UAT04Manual.gs
+          grep -Fq "'Notes'" verify-src/Config.gs
+          grep -Fq "'Notes': validated.notes" verify-src/Project1.gs
+          grep -Fq 'function applyPhase6Uat04NotesSchemaFix()' verify-src/UAT04Manual.gs
+          grep -Fq "code: 'UAT04_NOTES_SCHEMA_APPLIED'" verify-src/UAT04Manual.gs
+
+          STAGE="write_success_report"
+          PATCH_STATE="$(cat /tmp/patch-state.txt)"
+          cat > "$REPORT" <<EOF
+          TEST UAT-04 Notes persistence fix V2
+          status=SUCCESS
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          patch_state=${PATCH_STATE}
+          config_schema_header_added=yes
+          project1_writer_added=yes
+          migration_function=applyPhase6Uat04NotesSchemaFix
+          live_source_push=success
+          live_pullback_verification=success
+          spreadsheet_changed_during_install=no
+          script_properties_changed=no
+          gates_changed=no
+          calendar_changed=no
+          deployment_changed=no
+          production_touched=no
+          EOF
+          STAGE="complete"
+
+      - name: Publish sanitized result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-persistence-fix-v2.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-04 Notes persistence fix V2\nstatus=FAILED\nfailed_stage=report_missing\nspreadsheet_changed_during_install=no\nscript_properties_changed=no\ngates_changed=no\ncalendar_changed=no\ndeployment_changed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 Notes persistence fix V2" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 Notes persistence fix V2" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
