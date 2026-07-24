@@ -167,6 +167,68 @@ UAT-03 accepted for TEST Head with one MEDIUM deployment-variance item pending. 
 
 ## UAT-04 — Project 1 Reporting
 
-Result: IN PROGRESS
+Result: PASS WITH TEST HEAD CORRECTION NOTE
 
-Preparation requirement: keep all unrelated write gates FALSE, use one controlled TEST Project 1 submission, verify points mapping, master database append, proof/notes handling, Week 1–4/monthly rollups, idempotency or duplicate behavior, audit logging, and fail-closed gate restoration. Production remains untouched.
+### Controlled Runtime Result
+
+- Manual TEST-only runner `runPhase6Uat04Manual` completed successfully from the Apps Script Editor against TEST Head.
+- Runtime returned `UAT04_MANUAL_PASS` and completed normally.
+- The validation suite confirmed all 18 active Project 1 mappings and the approved total of 41 points across Recruitment, Sales, and Joint Field Coaching.
+- The validation suite also confirmed unique mapping keys, Week 1–4 bucket rules, required-proof enforcement, activity/sub-activity relationship enforcement, monthly counts and points, three activity-type analytics grouping, and the Project 1 ID prefix.
+- Controlled Activity ID: `P1-20260725-021137-ec3fcdaef4`.
+- Controlled Agent Code: `UAT04-20260725021135`.
+- Controlled activity: Recruitment / Orientation Attendance.
+- Assigned Team Member: `Ma'am Christine`.
+- Awarded points: `2`.
+- Required data and proof URL persistence passed.
+- Notes-column availability and Notes persistence passed.
+- Reporting Week resolved to `Week 4`; Reporting Month resolved to `2026-07`.
+- Controlled weekly points were `2`; controlled monthly record count was `1`; controlled monthly points were `2`.
+- Duplicate replay was blocked and did not create duplicate activity credit.
+- Audit logging passed.
+
+### Independent Spreadsheet Verification
+
+- `Project 1 Activity Database` now includes the `Notes` header as column T.
+- Row 40 contains exactly one active controlled record for Activity ID `P1-20260725-021137-ec3fcdaef4` and Agent Code `UAT04-20260725021135`.
+- The row is `UNIQUE`, `ACTIVE`, Recruitment / Orientation Attendance, and worth `2` points.
+- Required Data JSON contains the controlled prospect name and orientation date.
+- The controlled proof URL is retained.
+- Reporting Week is `Week 4`; Reporting Month displays as `2026-07`.
+- The controlled Notes value is retained in column T.
+- A duplicate search for the controlled Agent Code returned only the one active master record.
+- `Activity Audit Log` row 123 contains exactly one successful `PROJECT1_ACTIVITY_SUBMITTED` event for the controlled Activity ID, with the expected activity type, sub-activity, points, duplicate status, source, and request ID.
+
+### Safety Gate Closure
+
+- Final direct safety reset returned `UAT04_SAFETY_GATES_RESET` in environment `TEST` with `productionTouched=false`.
+- `ENABLE_BOOKING_WORKFLOW=FALSE`.
+- `ENABLE_PROJECT1_WRITES=FALSE`.
+- `ENABLE_RECRUITMENT_WRITES=FALSE`.
+- `ENABLE_ANALYTICS_WRITES=FALSE`.
+- `ENABLE_SCHEDULE_IMPORT_WRITES=FALSE`.
+- `ENABLE_CALENDAR_WRITES=FALSE`.
+- `PUBLIC_PORTAL_ENABLED=FALSE`.
+- `ENABLE_AUTOMATION_TRIGGERS=FALSE`.
+- Production remained untouched.
+
+### Defects and Corrections
+
+**LOW — Reporting-month runner assertion false failure.** The first controlled run wrote the correct Week 4 and July 2026 values, but the TEST-only runner compared the date-formatted Reporting Month cell through a raw string conversion. The runner was corrected to normalize the stored value through `project1MonthValue_()`. The first failed fixture was safely changed to `VOID`; the final run passed.
+
+**MEDIUM — Project 1 Notes were accepted but not persisted.** The live TEST validation path accepted `payload.notes`, but the Project 1 schema lacked a Notes column and the row writer omitted the value. TEST Head was corrected to add the `Notes` schema header and write `validated.notes`. A TEST-only non-destructive migration appended column T without rewriting existing rows. The final controlled run independently verified Notes persistence. This defect is closed for TEST Head.
+
+**LOW — Initial Notes schema migration used the wrong helper.** The first TEST-only migration called `ensureSheetForDefinition_()`, which only ensures sheet existence and does not synchronize headers. It was corrected to call `appendMissingHeaders_()`. The corrected migration added the Notes column and preserved existing rows.
+
+**MEDIUM — TEST deployment variance pending.** The Project 1 Notes product correction exists in TEST Head and the TEST spreadsheet schema has been migrated, but Apps Script deployment `@2` was intentionally left unchanged. Before production migration, the corrected source must be packaged into an explicitly approved immutable TEST version and the relevant deployed/internal-hub path must be regression-tested.
+
+### Failed and Superseded Attempts Preserved as Evidence
+
+- The first controlled UAT-04 run false-failed only on the obsolete Reporting Month assertion; its created row was safely changed to `VOID` and a cleanup audit record was written.
+- A subsequent controlled run passed all core reporting checks but returned `UAT04_MANUAL_PASS_WITH_NOTES_GAP`, correctly exposing the product Notes-persistence defect.
+- After the TEST Head product correction and schema migration, the final controlled run returned `UAT04_MANUAL_PASS` with `notesFieldAvailable=true` and `notesPersisted=true`.
+- Failed or false-negative temporary GitHub workflow attempts are retained as diagnostic evidence and are not counted as functional UAT passes.
+
+### Decision
+
+UAT-04 accepted for TEST Head. The documented mapping, validation, points, single-record append, weekly/monthly rollup, identity, proof/notes retention, duplicate prevention, audit, and final gate-closure criteria are satisfied. Before production migration, package the UAT-03 and UAT-04 product corrections into an approved immutable TEST version and rerun the relevant deployed-path regressions. Proceed to UAT-05 — Recruitment Workflow. Production activation remains NOT AUTHORIZED.
