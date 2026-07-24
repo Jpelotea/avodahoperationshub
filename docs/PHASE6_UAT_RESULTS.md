@@ -232,3 +232,69 @@ Result: PASS WITH TEST HEAD CORRECTION NOTE
 ### Decision
 
 UAT-04 accepted for TEST Head. The documented mapping, validation, points, single-record append, weekly/monthly rollup, identity, proof/notes retention, duplicate prevention, audit, and final gate-closure criteria are satisfied. Before production migration, package the UAT-03 and UAT-04 product corrections into an approved immutable TEST version and rerun the relevant deployed-path regressions. Proceed to UAT-05 — Recruitment Workflow. Production activation remains NOT AUTHORIZED.
+
+---
+
+## UAT-05 — Recruitment Workflow
+
+Result: PASS
+
+### Controlled Runtime Result
+
+- Manual TEST-only runner `runPhase6Uat05Manual` completed successfully from the Apps Script Editor against TEST Head.
+- Runtime returned `UAT05_MANUAL_PASS` and completed normally.
+- Recruitment validation tests passed for controlled stage/status values, No Show stage rejection, score validation and averaging, phone text storage, valid Initial-to-Final progression, and prevention of Final Interview regression to Screening.
+- Controlled hired Applicant ID: `APP-20260725-030528-b5b585635a`.
+- Controlled rejected Applicant ID: `APP-20260725-030643-3b5a9d1c52`.
+- Controlled withdrawn Applicant ID: `APP-20260725-030651-ba8decae2e`.
+- Applicant Tracking remained the primary pipeline source for all three controlled applicants.
+- The hired lifecycle created three linked Interview Records: one Initial Interview No Show, one completed Initial Interview, and one completed Final Interview.
+- No Show remained a status on the Initial Interview stage.
+- Rescheduled remained a status on the Initial Interview stage.
+- The hired applicant advanced through Screening, Initial Interview, Final Interview, Requirements, Onboarding, and Closed/Hired.
+- The rejected applicant closed as `Closed/Rejected`.
+- The withdrawn applicant closed as `Closed/Withdrawn`.
+- Duplicate applicant replay returned the existing rejected Applicant ID rather than creating a second applicant.
+- The hired applicant received two verified requirement records and two completed onboarding records.
+- Rejected and withdrawn applicants received no inapplicable requirements or onboarding rows.
+- All controlled TEST interview Calendar events were removed after the lifecycle.
+
+### Independent Spreadsheet and Calendar Verification
+
+- `Applicant Tracking` row 4 contains the hired applicant as `Closed/Hired`, Interview Status `Completed`, Final Decision `Proceed`, Requirements Status `Complete`, Onboarding Status `Complete`, and Record Status `ACTIVE`.
+- `Applicant Tracking` row 5 contains the rejected applicant as `Closed/Rejected`, with blank requirements and onboarding summaries because those trackers were not applicable.
+- `Applicant Tracking` row 6 contains the withdrawn applicant as `Closed/Withdrawn`, with blank requirements and onboarding summaries because those trackers were not applicable.
+- `Interview Records` rows 8–10 contain exactly three records linked to the hired Applicant ID: two Initial Interviews and one Final Interview; statuses are one `No Show` and two `Completed`; completed interviews retain the expected scores, overall score `4.17`, result `Proceed`, Meet links, and Calendar Event IDs.
+- `Applicant Timeline` contains nine hired-applicant movements, two rejected-applicant movements, and four withdrawn-applicant movements, for the expected total of 15 controlled timeline records.
+- Timeline evidence shows `No Show` and `Rescheduled` only as statuses; neither appears as a pipeline stage.
+- `Requirements Tracker` rows 6–7 contain the hired applicant's two verified TEST requirements.
+- `Onboarding Tracker` rows 6–7 contain the hired applicant's two completed TEST onboarding steps.
+- Searches of Requirements Tracker and Onboarding Tracker returned zero records for both the rejected and withdrawn Applicant IDs.
+- A direct TEST Calendar search for the hired Applicant ID on July 26, 2026 returned no remaining event, independently confirming Calendar cleanup.
+
+### Recruitment Analytics Verification
+
+- The source-backed recruitment analytics snapshot changed from 2 to 5 total applicants after the three controlled records were created.
+- Hired applicants changed from 2 to 3.
+- The final status breakdown contains `Hired: 3`, `Rejected: 1`, and `Withdrawn: 1`.
+- The analytics model therefore consumed all three controlled records and separated their closed outcomes correctly.
+- Follow-up for UAT-06: the current `Active Applicants` card is based on active record status rather than open pipeline stage/status. Closed outcomes remain Record Status `ACTIVE`, so the card changed from 2 to 5. This is consistent with the current source model but the label and intended business meaning should be reviewed during analytics UAT.
+
+### Safety Gate and Environment Closure
+
+- A direct pre-run safety reset returned `UAT05_SAFETY_GATES_RESET` with all eight controlled gates FALSE.
+- The runner temporarily enabled only `ENABLE_RECRUITMENT_WRITES` and `ENABLE_CALENDAR_WRITES` for the TEST lifecycle.
+- The runner's `finally` block restored all eight controlled gates to FALSE.
+- Final runtime output directly confirmed `ENABLE_BOOKING_WORKFLOW=FALSE`, `ENABLE_PROJECT1_WRITES=FALSE`, `ENABLE_RECRUITMENT_WRITES=FALSE`, `ENABLE_ANALYTICS_WRITES=FALSE`, `ENABLE_SCHEDULE_IMPORT_WRITES=FALSE`, `ENABLE_CALENDAR_WRITES=FALSE`, `PUBLIC_PORTAL_ENABLED=FALSE`, and `ENABLE_AUTOMATION_TRIGGERS=FALSE`.
+- Environment remained `TEST`; `productionTouched=false`.
+- Apps Script deployment `@2` remained unchanged.
+
+### Defects and Notes
+
+- No BLOCKER, HIGH, MEDIUM, or LOW product defect was opened from UAT-05.
+- The Activity Log sheet is not the recruitment audit store and therefore contained no Applicant ID match; recruitment evidence is retained in Applicant Tracking, Interview Records, Applicant Timeline, Requirements Tracker, Onboarding Tracker, Calendar cleanup, and source-backed analytics.
+- The `Active Applicants` metric-label observation is deferred to UAT-06 and is not classified as a UAT-05 failure.
+
+### Decision
+
+UAT-05 accepted. Applicant Tracking remained the primary pipeline record; interviews were linked correctly; timeline movements were complete; requirements and onboarding were created only when applicable; No Show and Rescheduled remained statuses; Hired, Rejected, and Withdrawn outcomes were consistent; recruitment analytics consumed the expected records; Calendar cleanup completed; and all safety gates were restored to FALSE. Proceed to UAT-06 — Analytics and Dashboard. Production activation remains NOT AUTHORIZED.
