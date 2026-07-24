@@ -1,0 +1,191 @@
+name: Fix TEST UAT-04 Notes Persistence
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/fix-test-uat04-notes-persistence.trigger'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: avodah-test-uat
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Patch TEST Head and install migration function
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Config.gs
+          test -f src/Project1.gs
+          test -f src/UAT04Manual.gs
+
+          node <<'NODE'
+          const fs = require('fs');
+
+          function replaceExactlyOnce(text, oldText, newText, label) {
+            const oldCount = text.split(oldText).length - 1;
+            const newCount = text.split(newText).length - 1;
+            if (newCount === 1 && oldCount === 0) return {text, state: 'already_patched'};
+            if (oldCount !== 1 || newCount !== 0) {
+              throw new Error(label + ': expected one old block and zero new blocks; old=' + oldCount + ', new=' + newCount);
+            }
+            return {text: text.replace(oldText, newText), state: 'changed'};
+          }
+
+          let config = fs.readFileSync('src/Config.gs', 'utf8');
+          const configOld = "        'Reporting Month', 'Record Status', 'Created By', 'Created At',\n        'Updated At'";
+          const configNew = "        'Reporting Month', 'Record Status', 'Created By', 'Created At',\n        'Updated At', 'Notes'";
+          const configResult = replaceExactlyOnce(config, configOld, configNew,
+            'Project 1 schema Notes header');
+          config = configResult.text;
+          fs.writeFileSync('src/Config.gs', config);
+
+          let project1 = fs.readFileSync('src/Project1.gs', 'utf8');
+          const writerOld = "      'Required Data JSON': safeJsonStringify_(validated.requiredData),\n      'Proof URL': validated.proofUrl,\n      'Duplicate Fingerprint': fingerprint,";
+          const writerNew = "      'Required Data JSON': safeJsonStringify_(validated.requiredData),\n      'Proof URL': validated.proofUrl,\n      'Notes': validated.notes,\n      'Duplicate Fingerprint': fingerprint,";
+          const writerResult = replaceExactlyOnce(project1, writerOld, writerNew,
+            'Project 1 Notes writer');
+          project1 = writerResult.text;
+          fs.writeFileSync('src/Project1.gs', project1);
+
+          let runner = fs.readFileSync('src/UAT04Manual.gs', 'utf8');
+          const migrationMarker = 'function applyPhase6Uat04NotesSchemaFix()';
+          let runnerState = 'already_patched';
+          if (!runner.includes(migrationMarker)) {
+            const insertionMarker = 'function runPhase6Uat04Manual() {';
+            const pos = runner.indexOf(insertionMarker);
+            if (pos < 0) throw new Error('UAT-04 runner insertion marker not found.');
+            const migration = `function applyPhase6Uat04NotesSchemaFix() {
+  requireUserRole_(['ADMIN']);
+  uat04Assert_(getEnvironment_() === 'TEST', 'UAT04_TEST_ENVIRONMENT_REQUIRED',
+    'The Notes schema migration may run only in TEST.');
+  var spreadsheet = getHubSpreadsheet_();
+  uat04Assert_(/^TEST(?:\\s|-)/i.test(spreadsheet.getName()),
+    'UAT04_TEST_SPREADSHEET_REQUIRED',
+    'The Notes schema migration requires a spreadsheet whose title begins with TEST.');
+
+  var startingGates = uat04GateState_();
+  var unsafe = AVODAH_UAT04_GATE_NAMES.filter(function(name) {
+    return startingGates[name] === true;
+  });
+  uat04Assert_(unsafe.length === 0, 'UAT04_UNSAFE_GATE_STATE',
+    'All controlled gates must be FALSE before the Notes schema migration starts.',
+    {enabledGates: unsafe});
+
+  var definition = getSheetDefinition_('Project 1 Activity Database');
+  uat04Assert_(definition && Array.isArray(definition.headers) &&
+    definition.headers.indexOf('Notes') !== -1,
+    'UAT04_NOTES_SCHEMA_DEFINITION_MISSING',
+    'The live TEST source does not define the Project 1 Notes column.');
+
+  ensureSheetForDefinition_(spreadsheet, definition);
+  SpreadsheetApp.flush();
+  var context = getTableContext_('Project 1 Activity Database');
+  var notesColumn = context.headerMap[normalizeHeader_('Notes')] || 0;
+  uat04Assert_(notesColumn > 0, 'UAT04_NOTES_COLUMN_NOT_CREATED',
+    'The Project 1 Notes column was not created.');
+
+  var result = {
+    ok: true,
+    code: 'UAT04_NOTES_SCHEMA_APPLIED',
+    sheet: context.sheet.getName(),
+    notesColumn: notesColumn,
+    notesColumnLetter: columnToLetter_(notesColumn),
+    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),
+    gates: uat04GateState_(),
+    environment: getEnvironment_(),
+    productionTouched: false
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
+
+`;
+            runner = runner.slice(0, pos) + migration + runner.slice(pos);
+            runnerState = 'changed';
+          }
+          fs.writeFileSync('src/UAT04Manual.gs', runner);
+
+          const states = [configResult.state, writerResult.state, runnerState];
+          fs.writeFileSync('/tmp/patch-state.txt', states.every(s => s === 'already_patched') ?
+            'already_patched' : 'changed');
+          NODE
+
+          for f in src/*.gs; do node --check < "$f"; done
+          clasp push --force >/dev/null
+
+          rm -rf verify-src && mkdir -p verify-src
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('.clasp.json','utf8'));j.rootDir='verify-src';fs.writeFileSync('.clasp.json',JSON.stringify(j));"
+          clasp pull >/dev/null
+          test -f verify-src/Config.gs
+          test -f verify-src/Project1.gs
+          test -f verify-src/UAT04Manual.gs
+          grep -Fq "'Updated At', 'Notes'" verify-src/Config.gs
+          grep -Fq "'Notes': validated.notes" verify-src/Project1.gs
+          grep -Fq 'function applyPhase6Uat04NotesSchemaFix()' verify-src/UAT04Manual.gs
+          grep -Fq "code: 'UAT04_NOTES_SCHEMA_APPLIED'" verify-src/UAT04Manual.gs
+          grep -Fq "notesPersisted: notesPersisted" verify-src/UAT04Manual.gs
+
+          PATCH_STATE="$(cat /tmp/patch-state.txt)"
+          cat > diagnostics/latest-test-uat04-notes-persistence-fix.txt <<EOF
+          TEST UAT-04 Notes persistence fix
+          commit=${GITHUB_SHA}
+          utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          patch_state=${PATCH_STATE}
+          config_schema_header_added=yes
+          project1_writer_added=yes
+          migration_function=applyPhase6Uat04NotesSchemaFix
+          live_source_push=success
+          live_pullback_verification=success
+          spreadsheet_changed_during_install=no
+          script_properties_changed=no
+          gates_changed=no
+          calendar_changed=no
+          deployment_changed=no
+          production_touched=no
+          EOF
+
+      - name: Publish sanitized result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-persistence-fix.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 Notes persistence fix" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 Notes persistence fix" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
