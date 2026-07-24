@@ -1,0 +1,14 @@
+TEST UAT-04 manual runner install
+commit=d888897a9928d18035ac54d6b71ffb9ab1888a14
+utc=2026-07-24T14:53:57Z
+runner_file=UAT04Manual.gs
+runner_function=runPhase6Uat04Manual
+safety_reset_function=resetPhase6Uat04SafetyGates
+live_source_push=success
+live_pullback_verification=success
+runner_creates_data_during_install=no
+script_properties_changed=no
+spreadsheet_changed=no
+calendar_changed=no
+deployment_changed=no
+production_touched=no
