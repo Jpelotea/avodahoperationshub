@@ -1,0 +1,97 @@
+name: Inspect TEST UAT-04 Current Reporting Assertion
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat04-current-reporting-assertion.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST runner and inspect reporting assertion
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat04-current-reporting-assertion.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-04 current reporting assertion inspection\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nwrite_operations_performed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/UAT04Manual.gs
+
+          STAGE="extract_assertion"
+          node <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('src/UAT04Manual.gs', 'utf8');
+          const needle = 'UAT04_REPORTING_BUCKET_MISMATCH';
+          const pos = text.indexOf(needle);
+          if (pos < 0) throw new Error('Reporting bucket assertion marker not found.');
+          let start = text.lastIndexOf('\n', Math.max(0, pos - 700));
+          start = start < 0 ? 0 : start + 1;
+          let end = text.indexOf('\n', pos + 500);
+          end = end < 0 ? text.length : end;
+          let snippet = text.slice(start, end);
+          snippet = snippet.replace(/[A-Za-z0-9_-]{40,}/g, '[REDACTED_LONG_TOKEN]');
+          const out = [
+            'TEST UAT-04 current reporting assertion inspection',
+            'status=SUCCESS',
+            'write_operations_performed=no',
+            'production_touched=no',
+            '',
+            snippet,
+            ''
+          ].join('\n');
+          fs.writeFileSync('diagnostics/latest-test-uat04-current-reporting-assertion.txt', out);
+          NODE
+
+          STAGE="verify_report"
+          test -s "$REPORT"
+          grep -q '^status=SUCCESS$' "$REPORT"
+          STAGE="complete"
+
+      - name: Publish sanitized diagnostic
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-current-reporting-assertion.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-04 current reporting assertion inspection\nstatus=FAILED\nfailed_stage=report_missing\nwrite_operations_performed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 current reporting assertion inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 current reporting assertion inspection" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
