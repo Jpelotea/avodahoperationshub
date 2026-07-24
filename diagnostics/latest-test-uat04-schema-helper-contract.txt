@@ -1,0 +1,114 @@
+TEST UAT-04 schema helper contract inspection
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+
+## ensureSheetForDefinition_
+function ensureSheetForDefinition_(spreadsheet, definition) {
+  var existing = findSheetForDefinition_(spreadsheet, definition);
+  if (existing) return {sheet: existing, created: false, logicalName: definition.name};
+  var created = spreadsheet.insertSheet(definition.name);
+  return {sheet: created, created: true, logicalName: definition.name};
+}
+
+## ensureColumnCapacity_
+function ensureColumnCapacity_(sheet, requiredColumns) {
+  var missing = requiredColumns - sheet.getMaxColumns();
+  if (missing > 0) sheet.insertColumnsAfter(sheet.getMaxColumns(), missing);
+}
+
+## appendMissingHeaders_
+function appendMissingHeaders_(sheet, requiredHeaders, headerRow) {
+  var row = Number(headerRow || 1);
+  var currentLastColumn = Math.max(sheet.getLastColumn(), 1);
+  var map = getHeaderMap_(sheet, row, currentLastColumn);
+  var missing = requiredHeaders.filter(function(header) {
+    return map[normalizeHeader_(header)] == null;
+  });
+  if (!missing.length) return [];
+  var startColumn = currentLastColumn + 1;
+  if (sheet.getLastColumn() === 0) startColumn = 1;
+  ensureColumnCapacity_(sheet, startColumn + missing.length - 1);
+  sheet.getRange(row, startColumn, 1, missing.length).setValues([missing]);
+  return missing;
+}
+
+## normalizeSheetHeaders_
+FUNCTION NOT FOUND: normalizeSheetHeaders_
+
+## getTableContext_
+function getTableContext_(logicalSheetName) {
+  var spreadsheet = getHubSpreadsheet_();
+  var definition = getSheetDefinition_(logicalSheetName);
+  if (!definition) {
+    throw avodahError_('UNKNOWN_SHEET', 'Unknown logical sheet: ' + logicalSheetName);
+  }
+  var sheet = findSheetForDefinition_(spreadsheet, definition);
+  if (!sheet) throw avodahError_('MISSING_SHEET', logicalSheetName + ' is missing.');
+  var lastColumn = sheet.getLastColumn();
+  if (lastColumn < 1) {
+    throw avodahError_('MISSING_HEADERS', logicalSheetName + ' has no headers.');
+  }
+  var headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0];
+  return {
+    logicalName: logicalSheetName,
+    definition: definition,
+    sheet: sheet,
+    headers: headers,
+    headerMap: getHeaderMap_(sheet, 1, lastColumn)
+  };
+}
+
+## getSheetDefinition_
+function getSheetDefinition_(logicalName) {
+  for (var i = 0; i < AVODAH_CONFIG.SHEET_DEFINITIONS.length; i += 1) {
+    var definition = AVODAH_CONFIG.SHEET_DEFINITIONS[i];
+    if (definition.name === logicalName) return definition;
+  }
+  return null;
+}
+
+## applyPhase6Uat04NotesSchemaFix
+function applyPhase6Uat04NotesSchemaFix() {
+  requireUserRole_(['ADMIN']);
+  uat04Assert_(getEnvironment_() === 'TEST', 'UAT04_TEST_ENVIRONMENT_REQUIRED',
+    'The Notes schema migration may run only in TEST.');
+  var spreadsheet = getHubSpreadsheet_();
+  uat04Assert_(/^TEST(?:\s|-)/i.test(spreadsheet.getName()),
+    'UAT04_TEST_SPREADSHEET_REQUIRED',
+    'The Notes schema migration requires a spreadsheet whose title begins with TEST.');
+
+  var startingGates = uat04GateState_();
+  var unsafe = AVODAH_UAT04_GATE_NAMES.filter(function(name) {
+    return startingGates[name] === true;
+  });
+  uat04Assert_(unsafe.length === 0, 'UAT04_UNSAFE_GATE_STATE',
+    'All controlled gates must be FALSE before the Notes schema migration starts.',
+    {enabledGates: unsafe});
+
+  var definition = getSheetDefinition_('Project 1 Activity Database');
+  uat04Assert_(definition && Array.isArray(definition.headers) &&
+    definition.headers.indexOf('Notes') !== -1,
+    'UAT04_NOTES_SCHEMA_DEFINITION_MISSING',
+    'The live TEST source does not define the Project 1 Notes column.');
+
+  ensureSheetForDefinition_(spreadsheet, definition);
+  SpreadsheetApp.flush();
+  var context = getTableContext_('Project 1 Activity Database');
+  var notesColumn = context.headerMap[normalizeHeader_('Notes')] || 0;
+  uat04Assert_(notesColumn > 0, 'UAT04_NOTES_COLUMN_NOT_CREATED',
+    'The Project 1 Notes column was not created.');
+
+  var result = {
+    ok: true,
+    code: 'UAT04_NOTES_SCHEMA_APPLIED',
+    sheet: context.sheet.getName(),
+    notesColumn: notesColumn,
+    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),
+    gates: uat04GateState_(),
+    environment: getEnvironment_(),
+    productionTouched: false
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
