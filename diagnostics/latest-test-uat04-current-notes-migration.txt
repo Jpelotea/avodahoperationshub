@@ -1,0 +1,53 @@
+TEST UAT-04 current Notes migration inspection
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+uses_append_missing_headers=true
+exposes_appended_headers=true
+contains_obsolete_standalone_existence_call=false
+
+function applyPhase6Uat04NotesSchemaFix() {
+  requireUserRole_(['ADMIN']);
+  uat04Assert_(getEnvironment_() === 'TEST', 'UAT04_TEST_ENVIRONMENT_REQUIRED',
+    'The Notes schema migration may run only in TEST.');
+  var spreadsheet = getHubSpreadsheet_();
+  uat04Assert_(/^TEST(?:\s|-)/i.test(spreadsheet.getName()),
+    'UAT04_TEST_SPREADSHEET_REQUIRED',
+    'The Notes schema migration requires a spreadsheet whose title begins with TEST.');
+
+  var startingGates = uat04GateState_();
+  var unsafe = AVODAH_UAT04_GATE_NAMES.filter(function(name) {
+    return startingGates[name] === true;
+  });
+  uat04Assert_(unsafe.length === 0, 'UAT04_UNSAFE_GATE_STATE',
+    'All controlled gates must be FALSE before the Notes schema migration starts.',
+    {enabledGates: unsafe});
+
+  var definition = getSheetDefinition_('Project 1 Activity Database');
+  uat04Assert_(definition && Array.isArray(definition.headers) &&
+    definition.headers.indexOf('Notes') !== -1,
+    'UAT04_NOTES_SCHEMA_DEFINITION_MISSING',
+    'The live TEST source does not define the Project 1 Notes column.');
+
+  var resolved = ensureSheetForDefinition_(spreadsheet, definition);
+  var appendedHeaders = appendMissingHeaders_(resolved.sheet, definition.headers, 1);
+  SpreadsheetApp.flush();
+  var context = getTableContext_('Project 1 Activity Database');
+  var notesColumn = context.headerMap[normalizeHeader_('Notes')] || 0;
+  uat04Assert_(notesColumn > 0, 'UAT04_NOTES_COLUMN_NOT_CREATED',
+    'The Project 1 Notes column was not created.');
+
+  var result = {
+    ok: true,
+    code: 'UAT04_NOTES_SCHEMA_APPLIED',
+    sheet: context.sheet.getName(),
+    notesColumn: notesColumn,
+    appendedHeaders: appendedHeaders,
+    existingDataRowsPreserved: Math.max(0, context.sheet.getLastRow() - 1),
+    gates: uat04GateState_(),
+    environment: getEnvironment_(),
+    productionTouched: false
+  };
+  console.log(JSON.stringify(result));
+  return result;
+}
