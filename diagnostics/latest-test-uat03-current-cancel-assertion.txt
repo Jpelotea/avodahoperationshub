@@ -1,0 +1,20 @@
+TEST UAT-03 current cancel assertion inspection
+write_operations_performed=no
+production_touched=no
+
+    var cancelledItem = findCurrentBookingByField_('Booking ID', bookingId, config);
+    assert_(cancelledItem && String(cancelledItem.record.Status || '') === 'Cancelled' &&
+      String(cancelledItem.record['Record Status'] || '') === 'INACTIVE' &&
+      String(cancelledItem.record['Management Token Hash'] || '') === '',
+      'UAT03_CANCEL_REGISTRY_NOT_REVOKED',
+      'Cancellation did not inactivate the registry row and revoke the token hash.');
+    assert_(!readBookingCalendarEvent_(config, eventId),
+      'UAT03_CANCEL_CALENDAR_EVENT_REMAINS',
+      'Cancelled TEST Calendar event still resolves as active.');
+    var logAfterCancel = findCalendarLogBooking_(bookingId);
+    assert_(logAfterCancel && String(logAfterCancel.record.Status || '') === 'Cancelled' &&
+      String(logAfterCancel.record['Record Status'] || '') === 'Archived',
+      'UAT03_CALENDAR_LOG_NOT_CANCELLED',
+      'Calendar Log did not reflect cancellation/archive state.');
+
+    var inactiveLookup = getPublicManagedBooking({management_token: managementToken});
