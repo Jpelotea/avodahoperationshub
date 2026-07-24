@@ -1,0 +1,75 @@
+name: Inspect TEST UAT-03 Current Cancel Assertion
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat03-current-cancel-assertion.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST runner and inspect cancellation assertion
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" diagnostics src
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+          npm install --global @google/clasp >/dev/null 2>&1
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/UAT03Manual.gs
+          node <<'NODE'
+          const fs = require('fs');
+          const text = fs.readFileSync('src/UAT03Manual.gs', 'utf8');
+          const needle = 'UAT03_CANCEL_CALENDAR_EVENT_REMAINS';
+          const pos = text.indexOf(needle);
+          if (pos < 0) throw new Error('Cancellation assertion marker not found.');
+          const start = Math.max(0, text.lastIndexOf('\n', Math.max(0, pos - 500)) + 1);
+          const endPos = text.indexOf('\n', pos + 500);
+          const end = endPos < 0 ? text.length : endPos;
+          let snippet = text.slice(start, end);
+          snippet = snippet.replace(/[A-Za-z0-9_-]{40,}/g, '[REDACTED_LONG_TOKEN]');
+          const out = [
+            'TEST UAT-03 current cancel assertion inspection',
+            'write_operations_performed=no',
+            'production_touched=no',
+            '',
+            snippet,
+            ''
+          ].join('\n');
+          fs.writeFileSync('diagnostics/latest-test-uat03-current-cancel-assertion.txt', out);
+          NODE
+
+      - name: Publish sanitized diagnostic
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat03-current-cancel-assertion.txt"
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-03 current cancel assertion inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-03 current cancel assertion inspection" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
