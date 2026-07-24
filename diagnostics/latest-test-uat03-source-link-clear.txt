@@ -1,0 +1,103 @@
+TEST UAT-03 source-link clear inspection
+write_operations_performed=no
+production_touched=no
+
+## clearBookingSourceAppointment_
+function clearBookingSourceAppointment_(record) {
+  var leadId = String(record['Lead ID'] || '');
+  var intakeId = String(record['Intake ID'] || '');
+  var lead = leadId ? firstObjectByHeaderValue_('Lead Database', 'Lead ID', leadId) : null;
+  var intake = intakeId ? firstObjectByHeaderValue_('Intake Submissions', 'Intake ID', intakeId) : null;
+  if (intake) {
+    updateObjectRow_('Intake Submissions', intake.rowNumber, {
+      'Follow-up Status': 'New',
+      'Appointment Date': '',
+      'Last Processed At': new Date()
+    });
+  }
+  if (lead) {
+    updateObjectRow_('Lead Database', lead.rowNumber, {
+      'Follow-up Status': 'New',
+      'Appointment Date': '',
+      'Updated At': new Date(),
+      'Updated By': bookingActorEmail_()
+    });
+  }
+}
+
+## updateBookingSourceLinks_
+function updateBookingSourceLinks_(identity, details, config) {
+  var actor = bookingActorEmail_();
+  if (identity.intake) {
+    updateObjectRow_('Intake Submissions', identity.intake.rowNumber, {
+      'Follow-up Status': 'Appointment Set',
+      'Assigned To': config.owner,
+      'Appointment Date': details.start,
+      'Booking ID': details.bookingId,
+      'Calendar Event ID': details.eventId,
+      'Last Processed At': new Date()
+    });
+  }
+  updateObjectRow_('Lead Database', identity.lead.rowNumber, {
+    'Assigned To': config.owner,
+    'Follow-up Status': 'Appointment Set',
+    'Appointment Date': details.start,
+    'Booking ID': details.bookingId,
+    'Calendar Event ID': details.eventId,
+    'Updated At': new Date(),
+    'Updated By': actor
+  });
+}
+
+## resolveBookingIdentity_
+function resolveBookingIdentity_(payload) {
+  var input = payload || {};
+  var leadReference = String(input.lead_id || input.leadId || '').trim();
+  var intakeReference = String(input.intake_id || input.intakeId || '').trim();
+  var submissionReference = String(input.submission_id || input.submissionId || '').trim();
+  var intake = null;
+  var lead = null;
+
+  if (/^LEAD-/i.test(leadReference)) {
+    lead = firstObjectByHeaderValue_('Lead Database', 'Lead ID', leadReference);
+  } else if (/^INT-/i.test(leadReference) && !intakeReference) {
+    intakeReference = leadReference;
+  } else if (leadReference && !submissionReference) {
+    submissionReference = leadReference;
+  }
+
+  if (intakeReference) {
+    intake = firstObjectByHeaderValue_('Intake Submissions', 'Intake ID', intakeReference);
+  }
+  if (!intake && submissionReference) {
+    intake = firstObjectByHeaderValue_('Intake Submissions', 'Submission ID', submissionReference);
+  }
+
+  if (intake && !String(intake.record['Lead ID'] || '').trim() &&
+      typeof processIntakeSubmissionByRow_ === 'function') {
+    processIntakeSubmissionByRow_(intake.rowNumber, 'BOOKING_IDENTITY_RESOLUTION');
+    intake = getObjectRow_('Intake Submissions', intake.rowNumber);
+  }
+
+  if (!lead && intake) {
+    var linkedLeadId = String(intake.record['Lead ID'] || '').trim();
+    if (linkedLeadId) lead = firstObjectByHeaderValue_('Lead Database', 'Lead ID', linkedLeadId);
+  }
+  if (!lead && leadReference) {
+    lead = firstObjectByHeaderValue_('Lead Database', 'Lead ID', leadReference);
+  }
+  if (!lead) {
+    return {ok: false, code: 'LEAD_NOT_FOUND', message: 'The linked lead was not found.'};
+  }
+  if (!intake) {
+    var primaryIntakeId = String(lead.record['Primary Intake ID'] || '').trim();
+    if (primaryIntakeId) {
+      intake = firstObjectByHeaderValue_('Intake Submissions', 'Intake ID', primaryIntakeId);
+    }
+  }
+  if (String(lead.record['Record Status'] || 'ACTIVE').toUpperCase() !== 'ACTIVE') {
+    return {ok: false, code: 'LEAD_NOT_ACTIVE', message: 'The lead is not active.'};
+  }
+  return {ok: true, lead: lead, intake: intake};
+}
+
