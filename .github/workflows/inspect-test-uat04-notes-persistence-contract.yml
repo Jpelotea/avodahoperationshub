@@ -1,0 +1,125 @@
+name: Inspect TEST UAT-04 Notes Persistence Contract
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat04-notes-persistence-contract.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST source and inspect Notes persistence contract
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-persistence-contract.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-04 Notes persistence contract inspection\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nwrite_operations_performed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+          test -f src/Config.gs
+          test -f src/Project1.gs
+
+          STAGE="extract_contracts"
+          node <<'NODE'
+          const fs = require('fs');
+
+          function excerpt(text, marker, before, after) {
+            const pos = text.indexOf(marker);
+            if (pos < 0) return `MARKER NOT FOUND: ${marker}`;
+            const start = Math.max(0, pos - before);
+            const end = Math.min(text.length, pos + marker.length + after);
+            return text.slice(start, end);
+          }
+
+          const config = fs.readFileSync('src/Config.gs', 'utf8');
+          const project1 = fs.readFileSync('src/Project1.gs', 'utf8');
+          const allFiles = fs.readdirSync('src').filter(f => /\.gs$/.test(f));
+          const schemaMatches = [];
+          for (const file of allFiles) {
+            const text = fs.readFileSync('src/' + file, 'utf8');
+            const lines = text.split(/\r?\n/);
+            lines.forEach((line, i) => {
+              if (/ensure.*sheet|sheet.*schema|headers|ensureFoundation|synchronize|setupFoundation/i.test(line)) {
+                schemaMatches.push(`${file}:${i + 1}: ${line.trim().slice(0, 500)}`);
+              }
+            });
+          }
+
+          const out = [
+            'TEST UAT-04 Notes persistence contract inspection',
+            'status=SUCCESS',
+            'write_operations_performed=no',
+            'production_touched=no',
+            '',
+            '## Config Project 1 schema excerpt',
+            excerpt(config, "name: 'Project 1 Activity Database'", 500, 1600),
+            '',
+            '## Project 1 append object excerpt',
+            excerpt(project1, "appendObjectRow_('Project 1 Activity Database'", 500, 2200),
+            '',
+            '## Project 1 payload/validation excerpts',
+            excerpt(project1, 'function validateProject1Submission_', 0, 2200),
+            '',
+            '## Candidate schema synchronization lines',
+            ...schemaMatches.slice(0, 300),
+            ''
+          ];
+          let content = out.join('\n').replace(/[A-Za-z0-9_-]{40,}/g, '[REDACTED_LONG_TOKEN]');
+          if (Buffer.byteLength(content, 'utf8') > 500000) {
+            content = content.slice(0, 500000) + '\n[TRUNCATED]\n';
+          }
+          fs.writeFileSync('diagnostics/latest-test-uat04-notes-persistence-contract.txt', content);
+          NODE
+
+          STAGE="verify_report"
+          test -s "$REPORT"
+          grep -q '^status=SUCCESS$' "$REPORT"
+          STAGE="complete"
+
+      - name: Publish sanitized diagnostic
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-notes-persistence-contract.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-04 Notes persistence contract inspection\nstatus=FAILED\nfailed_stage=report_missing\nwrite_operations_performed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 Notes persistence contract inspection" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 Notes persistence contract inspection" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
