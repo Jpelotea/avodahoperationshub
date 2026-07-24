@@ -1,0 +1,10 @@
+TEST UAT-04 Notes schema migration fix V2
+status=FAILED
+failed_stage=pullback_verification
+exit_code=1
+spreadsheet_changed_during_install=no
+script_properties_changed=no
+gates_changed=no
+calendar_changed=no
+deployment_changed=no
+production_touched=no
