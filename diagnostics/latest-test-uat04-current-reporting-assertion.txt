@@ -1,0 +1,32 @@
+TEST UAT-04 current reporting assertion inspection
+status=SUCCESS
+write_operations_performed=no
+production_touched=no
+
+    var requiredData = safeJsonParse_(row['Required Data JSON'], null);
+    uat04Assert_(requiredData &&
+      Object.prototype.toString.call(requiredData) === '[object Object]',
+      'UAT04_REQUIRED_DATA_INVALID',
+      'Required Data JSON is missing or invalid.');
+    mapping.requiredFields.filter(function(key) {
+      return key !== 'proofUrl';
+    }).forEach(function(key) {
+      uat04Assert_(String(requiredData[key] || '') !== '',
+        'UAT04_REQUIRED_DATA_FIELD_MISSING',
+        'A required data field was not persisted.', {field: key});
+    });
+
+    var expectedWeek = project1ReportingWeek_(now);
+    uat04Assert_(String(row['Reporting Week'] || '') === expectedWeek &&
+      String(row['Reporting Month'] || '') === monthKey,
+      'UAT04_REPORTING_BUCKET_MISMATCH',
+      'The reporting week or month bucket is incorrect.');
+
+    var controlledRows = getObjectRows_('Project 1 Activity Database').filter(
+      function(item) {
+        return String(item.record['Agent Code'] || '').trim().toUpperCase() ===
+          agentCode.toUpperCase() &&
+          String(item.record['Record Status'] || 'ACTIVE').toUpperCase() === 'ACTIVE';
+      });
+    var weekPoints = controlledRows.filter(function(item) {
+      return String(item.record['Reporting Week'] || '') === expectedWeek;
