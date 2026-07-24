@@ -1,0 +1,163 @@
+name: Inspect TEST UAT-04 Project 1 Contract V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/inspect-test-uat04-project1-contract-v2.trigger'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: TEST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pull live TEST source and build bounded diagnostic
+        id: inspect
+        shell: bash
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          set -Eeuo pipefail
+          REPORT="diagnostics/latest-test-uat04-project1-contract-v2.txt"
+          STAGE="initialize"
+          mkdir -p "$HOME" diagnostics src
+          trap 'rc=$?; if [ "$rc" -ne 0 ]; then printf "TEST UAT-04 Project 1 contract inspection V2\nstatus=FAILED\nfailed_stage=%s\nexit_code=%s\nwrite_operations_performed=no\nproduction_touched=no\n" "$STAGE" "$rc" > "$REPORT"; fi' EXIT
+
+          STAGE="write_clasp_credentials"
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+          chmod 600 "$HOME/.clasprc.json"
+          cat > .clasp.json <<'JSON'
+          {"scriptId":"1zY0oLLW9_MtXdPvRmyBci2TMnBnCwM6bbjXIMnK9-sSs4iaSmX41oZYO","rootDir":"src","scriptExtensions":[".gs",".js"],"htmlExtensions":[".html"]}
+          JSON
+
+          STAGE="install_clasp"
+          npm install --global @google/clasp >/dev/null 2>&1
+
+          STAGE="pull_live_test_source"
+          rm -rf src && mkdir -p src
+          clasp pull >/dev/null
+
+          STAGE="scan_project1_contracts"
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const root = 'src';
+          const report = 'diagnostics/latest-test-uat04-project1-contract-v2.txt';
+          const files = fs.readdirSync(root).filter(f => /\.(gs|js)$/.test(f));
+          const terms = [
+            /project\s*1/i,
+            /project1/i,
+            /ENABLE_PROJECT1_WRITES/i,
+            /Project 1 Activity Database/i,
+            /Activity Audit Log/i,
+            /Week 1|Week 2|Week 3|Week 4|Monthly Summary/i,
+            /sub[-_ ]?activity/i,
+            /activity points?/i,
+            /submit.*activity/i,
+            /activity.*submit/i
+          ];
+
+          function extractFunction(source, start) {
+            const open = source.indexOf('{', start);
+            if (open < 0) return '';
+            let depth = 0, s = false, d = false, t = false, esc = false;
+            for (let i = open; i < source.length; i++) {
+              const c = source[i];
+              if (esc) esc = false;
+              else if (c === '\\') esc = true;
+              else if (!d && !t && c === "'") s = !s;
+              else if (!s && !t && c === '"') d = !d;
+              else if (!s && !d && c === '`') t = !t;
+              else if (!s && !d && !t) {
+                if (c === '{') depth += 1;
+                else if (c === '}') {
+                  depth -= 1;
+                  if (depth === 0) return source.slice(start, i + 1);
+                }
+              }
+            }
+            return source.slice(start, Math.min(source.length, start + 5000));
+          }
+
+          const functions = [];
+          const matchedLines = [];
+          for (const file of files) {
+            const text = fs.readFileSync(path.join(root, file), 'utf8');
+            const lines = text.split(/\r?\n/);
+            for (let i = 0; i < lines.length && matchedLines.length < 300; i++) {
+              if (terms.some(r => r.test(lines[i]))) {
+                matchedLines.push(`${file}:${i + 1}: ${lines[i].trim().slice(0, 500)}`);
+              }
+            }
+            const re = /function\s+([A-Za-z0-9_]+)\s*\(/g;
+            let m;
+            while ((m = re.exec(text)) && functions.length < 120) {
+              const body = extractFunction(text, m.index);
+              if (terms.some(r => r.test(m[1]) || r.test(body))) {
+                functions.push({file, name: m[1], excerpt: body.slice(0, 5000)});
+              }
+            }
+          }
+
+          const out = [
+            'TEST UAT-04 Project 1 contract inspection V2',
+            'status=SUCCESS',
+            'write_operations_performed=no',
+            'production_touched=no',
+            `source_file_count=${files.length}`,
+            `matched_function_count=${functions.length}`,
+            `matched_line_count=${matchedLines.length}`,
+            '',
+            '## Matched functions'
+          ];
+          for (const item of functions) {
+            out.push(`### ${item.file} :: ${item.name}`);
+            out.push(item.excerpt.replace(/[A-Za-z0-9_-]{40,}/g, '[REDACTED_LONG_TOKEN]'));
+            out.push('');
+          }
+          out.push('## Matched source lines');
+          out.push(...matchedLines);
+          out.push('');
+
+          let content = out.join('\n');
+          const limit = 700000;
+          if (Buffer.byteLength(content, 'utf8') > limit) {
+            content = content.slice(0, limit) + '\n\n[DIAGNOSTIC_TRUNCATED_AT_700KB]\n';
+          }
+          fs.writeFileSync(report, content);
+          NODE
+
+          STAGE="verify_bounded_report"
+          test -s "$REPORT"
+          test "$(wc -c < "$REPORT")" -le 710000
+          grep -q '^status=SUCCESS$' "$REPORT"
+          STAGE="complete"
+
+      - name: Publish sanitized diagnostic
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          REPORT="diagnostics/latest-test-uat04-project1-contract-v2.txt"
+          if [ ! -s "$REPORT" ]; then
+            printf "TEST UAT-04 Project 1 contract inspection V2\nstatus=FAILED\nfailed_stage=report_missing\nwrite_operations_performed=no\nproduction_touched=no\n" > "$REPORT"
+          fi
+          CONTENT_B64="$(base64 -w 0 "$REPORT")"
+          CURRENT_SHA="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT?ref=main" | jq -r '.sha // empty' || true)"
+          if [ -n "$CURRENT_SHA" ]; then
+            jq -n --arg message "Record TEST UAT-04 Project 1 contract inspection V2" --arg content "$CONTENT_B64" --arg sha "$CURRENT_SHA" --arg branch main '{message:$message,content:$content,sha:$sha,branch:$branch}' > /tmp/payload.json
+          else
+            jq -n --arg message "Record TEST UAT-04 Project 1 contract inspection V2" --arg content "$CONTENT_B64" --arg branch main '{message:$message,content:$content,branch:$branch}' > /tmp/payload.json
+          fi
+          curl -fsSL -X PUT -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPOSITORY/contents/$REPORT" -d @/tmp/payload.json >/dev/null
